@@ -23,7 +23,7 @@ Master thesis experiment tracker. Dataset: IBM AML **HI-Small**, truncated to Se
 **Protocol for every run:** threshold chosen on validation, best-val-F1 checkpoint, test scored
 once; headline metric minority-class F1, with PR-AUC / ROC-AUC / precision / recall alongside.
 
-**Architecture rule:** 2 message-passing layers, hidden 64, dropout 0.3, same readout MLP and
+**Architecture rule:** 2 message-passing layers, **hidden 128**, dropout 0.3 (128 rather than the paper's 64 so the 81-dim feature set is never compressed in message passing; fixed a priori for ALL runs), same readout MLP and
 training recipe for every model — no dimension or layer changes, ever. Adding features changes
 only input-projection widths. Within a family the invariant-parameter count must match exactly;
 across families dims/depth are equal but operators differ (both counts recorded per run).
@@ -47,7 +47,7 @@ across families dims/depth are equal but operators differ (both counts recorded 
 
 | # | Model | Message passing | Question | Status |
 |---|---|---|---|---|
-| 1 | GIN | node features only | topology alone, sum aggregation | ✅ test F1 0.385 · PR-AUC 0.314 (seed 42, best epoch 13, no overfitting) |
+| 1 | GIN | node features only | topology alone, sum aggregation | 🔄 re-run at hidden 128 (hidden-64 reference: test F1 0.385 · PR-AUC 0.314, archived) |
 | 2 | GINE | + 20 base edge feats | edge features inside sum MP | ⬜ |
 | 3 | PNA | node features only | multi-aggregator MP | ⬜ (needs PNA/GAT added to the notebook) |
 | 4 | PNA | + 20 base edge feats | edge features inside PNA | ⬜ |
@@ -67,6 +67,13 @@ across families dims/depth are equal but operators differ (both counts recorded 
 | 13 | GINE | + 20 base feats in MP, readout = embeddings + GFP only (61) | ⬜ |
 | 14 | PNA | + 20 base feats in MP, readout = embeddings + GFP only (61) | ⬜ |
 | 15 | GATv2 | + 20 base feats in MP, readout = embeddings + GFP only (61) | ⬜ |
+| 16 | GINE | + 20 base in MP, readout = base+GFP (81) | ⬜ |
+| 17 | PNA | + 20 base in MP, readout = base+GFP (81) | ⬜ |
+| 18 | GATv2 | + 20 base in MP, readout = base+GFP (81) | ⬜ |
+
+Runs 16–18 add **GFP at the readout only** (base features stay in MP): between run 2 and
+run 8 two things change at once — these isolate whether the GFP uplift comes from the decision
+layer or from message passing.
 
 Runs 13–15 are the **split-roles** variant: message passing digests the raw transaction
 attributes into the embeddings, the classifier sees only `[h_src, h_dst, GFP]` — do raw
