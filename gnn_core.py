@@ -20,7 +20,7 @@ from sklearn.metrics import (average_precision_score, f1_score, precision_recall
                              precision_score, recall_score, roc_auc_score)
 from torch_geometric.data import Data
 from torch_geometric.loader import LinkNeighborLoader
-from torch_geometric.nn import GINConv, GINEConv
+from torch_geometric.nn import GATv2Conv, GINConv, GINEConv
 from torch_geometric.utils import degree
 from tqdm.auto import tqdm
 
@@ -30,7 +30,9 @@ NUM_LAYERS    = 2
 DROPOUT       = 0.3
 HEADS         = 4              # GATv2 / Transformer: 4 heads x 32 = 128
 NUM_NEIGHBORS = [100, 100]     # neighbours sampled per hop, one entry per layer
-BATCH_SIZE    = 8192           # seed edges per mini-batch
+BATCH_SIZE    = 8192           # seed edges per optimizer step
+ACCUM_STEPS   = 1              # >1: the 8192 seeds arrive as ACCUM_STEPS smaller sampled micro-batches, one step per 8192
+                               # (same update, smaller subgraph in memory — for GATv2 on Kaggle if it runs out of GPU RAM)
 EPOCHS        = 20
 LR            = 1e-3
 WEIGHT_DECAY  = 1e-5           # Adam L2 term; every run since the first batch used it, so it is part of the recipe
@@ -114,8 +116,10 @@ def make_conv(operator, hidden, mp_edge_dim, deg_hist=None):
                                   'edge_dim=mp_edge_dim or None, towers=1) — needs the training-graph '
                                   'in-degree histogram (in_degree_histogram)')
     if operator == 'gat':
-        raise NotImplementedError('gat: GATv2Conv(hidden, hidden // HEADS, heads=HEADS, '
-                                  'edge_dim=mp_edge_dim or None)')
+        # 4 heads x 32 concatenated -> 128; lin_edge (edge_dim) is the only width-dependent tensor
+        if mp_edge_dim > 0:
+            return GATv2Conv(hidden, hidden // HEADS, heads=HEADS, edge_dim=mp_edge_dim)
+        return GATv2Conv(hidden, hidden // HEADS, heads=HEADS)
     if operator == 'transformer':
         raise NotImplementedError('transformer: TransformerConv(hidden, hidden // HEADS, heads=HEADS, '
                                   'edge_dim=mp_edge_dim or None)')
@@ -197,10 +201,12 @@ def count_params(model):
 
 
 def invariant_params(model):
-    '''Parameters whose shape does not depend on the edge-feature widths (67,587 for the GIN family).
+    '''Parameters whose shape does not depend on the edge-feature widths.
 
-    Excluded: the edge projection inside the conv (.lin. / lin_edge / edge_encoder) and the
-    readout's first Linear (classifier.0.). Must be identical across feature configs.
+    67,587 for the GIN family, 67,585 for the GATv2 family (lin_l / lin_r / att / bias count,
+    lin_edge does not). Excluded: the edge projection inside the conv (.lin. / lin_edge /
+    edge_encoder) and the readout's first Linear (classifier.0.). Must be identical across
+    feature configs within a family.
     '''
     width_dependent = ('.lin.', 'lin_edge', 'edge_encoder', 'classifier.0.')
     total = 0
@@ -228,7 +234,10 @@ def make_loader(graph, shuffle, mp_idx, readout_idx, temporal=False):
     seed_y     = graph.y[seed_mask].float()
     seed_feats = graph.edge_attr[seed_mask][:, readout_idx]
 
-    kwargs = dict(num_neighbors=NUM_NEIGHBORS, batch_size=BATCH_SIZE, edge_label_index=seed_index,
+    # the shuffled (train) loader yields micro-batches of BATCH_SIZE // ACCUM_STEPS seeds; val/test predict at full size
+    assert BATCH_SIZE % ACCUM_STEPS == 0, f'BATCH_SIZE {BATCH_SIZE} must be divisible by ACCUM_STEPS {ACCUM_STEPS}'
+    batch_size = BATCH_SIZE // ACCUM_STEPS if shuffle else BATCH_SIZE
+    kwargs = dict(num_neighbors=NUM_NEIGHBORS, batch_size=batch_size, edge_label_index=seed_index,
                   edge_label=seed_y, shuffle=shuffle)
     if temporal:
         # only edges earlier than the seed are sampled (needs a recent pyg-lib)
@@ -363,21 +372,32 @@ def train_one_run(model, loaders, out_dir):
     '''
     train_loader, train_feats = loaders['train']
     val_loader,   val_feats   = loaders['val']
-    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([POS_WEIGHT], device=device))
+    # summed (not mean) loss: micro-batches add up and the gradient is divided by the seed count at
+    # step time -> exactly the mean-loss gradient over the BATCH_SIZE seeds, whatever ACCUM_STEPS is
+    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([POS_WEIGHT], device=device), reduction='sum')
     optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
+    if ACCUM_STEPS > 1:
+        print(f'gradient accumulation: {ACCUM_STEPS} micro-batches of {BATCH_SIZE // ACCUM_STEPS} seeds per optimizer step')
 
     history = []
     best_val_f1, best_epoch, best_threshold = -1.0, 0, 0.5
     for epoch in range(1, EPOCHS + 1):
         t0 = time.time()
         model.train()
-        for batch in tqdm(train_loader, desc='train', leave=False):
-            optimizer.zero_grad()
+        optimizer.zero_grad()
+        n_seen = 0
+        for step, batch in enumerate(tqdm(train_loader, desc='train', leave=False), start=1):
             logits, y = forward_batch(model, batch, train_feats)
-            loss = criterion(logits, y)
-            loss.backward()
-            optimizer.step()
+            criterion(logits, y).backward()
+            n_seen += len(y)
+            if step % ACCUM_STEPS == 0 or step == len(train_loader):
+                for p in model.parameters():
+                    if p.grad is not None:
+                        p.grad.div_(n_seen)
+                optimizer.step()
+                optimizer.zero_grad()
+                n_seen = 0
 
         # overfitting diagnostics: train and val in eval mode; train F1 reuses the val threshold
         y_train, p_train, _ = predict(model, train_loader, train_feats, 'train')
@@ -467,7 +487,7 @@ def result_row(name, operator, cfg, mp_direction, temporal, best_epoch, threshol
     '''The flat result row shared by results.json and batch_summary.csv.'''
     row = {'run': name, 'operator': operator, 'mp': cfg['mp'], 'readout': cfg['readout'],
            'mp_direction': mp_direction, 'temporal_sampling': temporal, 'seed': SEED,
-           'best_epoch': best_epoch, 'threshold': threshold,
+           'accum_steps': ACCUM_STEPS, 'best_epoch': best_epoch, 'threshold': threshold,
            'params': n_params, 'invariant_params': n_invariant}
     row.update(flatten_metrics(metrics))
     return row
@@ -527,46 +547,46 @@ def run_experiment(operator, cfg, graphs, col_sets, node_dim, out_root, mp_direc
     return row
 
 
-def rescore_run(operator, cfg, graphs, col_sets, node_dim, src_root, out_root,
-                mp_direction='in', temporal=False):
-    '''Rebuild results.json and curves.png of a finished run from its best.pt + history.csv; no training.
+# def rescore_run(operator, cfg, graphs, col_sets, node_dim, src_root, out_root,
+#                 mp_direction='in', temporal=False):
+#     '''Rebuild results.json and curves.png of a finished run from its best.pt + history.csv; no training.
 
-    best_epoch and threshold come from history.csv; best.pt and history.csv are copied to out_root.
-    '''
-    name = run_name(operator, cfg, mp_direction, temporal)
-    src_dir, out_dir = f'{src_root}/{name}', f'{out_root}/{name}'
-    os.makedirs(out_dir, exist_ok=True)
-    mp_idx, readout_idx = col_sets[cfg['mp']], col_sets[cfg['readout']]
+#     best_epoch and threshold come from history.csv; best.pt and history.csv are copied to out_root.
+#     '''
+#     name = run_name(operator, cfg, mp_direction, temporal)
+#     src_dir, out_dir = f'{src_root}/{name}', f'{out_root}/{name}'
+#     os.makedirs(out_dir, exist_ok=True)
+#     mp_idx, readout_idx = col_sets[cfg['mp']], col_sets[cfg['readout']]
 
-    history = pd.read_csv(f'{src_dir}/history.csv')
-    best_epoch, threshold = best_epoch_from_history(history)
+#     history = pd.read_csv(f'{src_dir}/history.csv')
+#     best_epoch, threshold = best_epoch_from_history(history)
 
-    set_seed(SEED)
-    deg_hist = in_degree_histogram(graphs['train']) if operator == 'pna' else None
-    model = build_model(operator, node_dim, len(mp_idx), len(readout_idx),
-                        mp_direction == 'bidirectional', deg_hist)
-    model.load_state_dict(torch.load(f'{src_dir}/best.pt', map_location=device))   # strict: keys must match
-    n_params, n_invariant = count_params(model), invariant_params(model)
-    print_model_header(name, mp_idx, readout_idx, n_params, n_invariant)
-    print(f're-scoring from {src_dir}: best epoch {best_epoch}, threshold {threshold:.3f}')
+#     set_seed(SEED)
+#     deg_hist = in_degree_histogram(graphs['train']) if operator == 'pna' else None
+#     model = build_model(operator, node_dim, len(mp_idx), len(readout_idx),
+#                         mp_direction == 'bidirectional', deg_hist)
+#     model.load_state_dict(torch.load(f'{src_dir}/best.pt', map_location=device))   # strict: keys must match
+#     n_params, n_invariant = count_params(model), invariant_params(model)
+#     print_model_header(name, mp_idx, readout_idx, n_params, n_invariant)
+#     print(f're-scoring from {src_dir}: best epoch {best_epoch}, threshold {threshold:.3f}')
 
-    loaders = make_loaders(graphs, mp_idx, readout_idx, temporal)
-    metrics, preds = score_all_splits(model, loaders, graphs, threshold)
-    row = result_row(name, operator, cfg, mp_direction, temporal, best_epoch, threshold,
-                     n_params, n_invariant, metrics)
-    save_run(out_dir, row)
-    save_predictions(out_dir, graphs, preds, threshold)
-    plot_curves(history, preds['test']['y'], preds['test']['prob'], metrics['test']['pr_auc'],
-                best_epoch, name, f'{out_dir}/curves.png')
+#     loaders = make_loaders(graphs, mp_idx, readout_idx, temporal)
+#     metrics, preds = score_all_splits(model, loaders, graphs, threshold)
+#     row = result_row(name, operator, cfg, mp_direction, temporal, best_epoch, threshold,
+#                      n_params, n_invariant, metrics)
+#     save_run(out_dir, row)
+#     save_predictions(out_dir, graphs, preds, threshold)
+#     plot_curves(history, preds['test']['y'], preds['test']['prob'], metrics['test']['pr_auc'],
+#                 best_epoch, name, f'{out_dir}/curves.png')
 
-    for fname in ('best.pt', 'history.csv'):
-        if os.path.abspath(f'{src_dir}/{fname}') != os.path.abspath(f'{out_dir}/{fname}'):
-            shutil.copy(f'{src_dir}/{fname}', f'{out_dir}/{fname}')
+#     for fname in ('best.pt', 'history.csv'):
+#         if os.path.abspath(f'{src_dir}/{fname}') != os.path.abspath(f'{out_dir}/{fname}'):
+#             shutil.copy(f'{src_dir}/{fname}', f'{out_dir}/{fname}')
 
-    del model, loaders
-    gc.collect()
-    torch.cuda.empty_cache()
-    return row
+#     del model, loaders
+#     gc.collect()
+#     torch.cuda.empty_cache()
+#     return row
 
 
 def summarize_batch(rows, out_root):

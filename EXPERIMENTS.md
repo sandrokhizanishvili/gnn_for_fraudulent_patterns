@@ -17,8 +17,8 @@ Mirrored on the Notion experiments page (kept in sync).
 
 ## Now
 
-- [ ] 🔄 GIN batch (GIN-1 … GIN-5) retrained under the full evaluation protocol — Kaggle, started 26 Sep
-- [ ] GIN-6 and GIN-7 (second small batch)
+- [x] GIN batch (GIN-1 … GIN-7) trained under the full evaluation protocol — Kaggle, 26 Sep;
+      results in `Progress_Report.md` §7.1 (winner GIN-5, test F1 0.525)
 - [ ] PNA notebook + batch (7 runs)
 - [ ] GATv2 notebook + batch (7 runs)
 
@@ -71,13 +71,13 @@ passing / which the final classifier sees. "base" = 20 baseline, "base+GFP" = al
 
 ### GIN family
 
-- [ ] 🔄 **GIN-1** · none / base — topology alone, the reference point → `Outputs/GIN/gin_mp-none_readout-base_dir-in/`
-- [ ] 🔄 **GIN-2** · base / base — edge features inside message passing → `Outputs/GIN/gin_mp-base_readout-base_dir-in/`
-- [ ] 🔄 **GIN-3** · none / base+GFP — GFP only at the decision layer → `Outputs/GIN/gin_mp-none_readout-full_dir-in/`
-- [ ] 🔄 **GIN-4** · base+GFP / base+GFP — GFP everywhere → `Outputs/GIN/gin_mp-full_readout-full_dir-in/`
-- [ ] 🔄 **GIN-5** · base / base+GFP — GFP at the decision layer only → `Outputs/GIN/gin_mp-base_readout-full_dir-in/`
-- [ ] **GIN-6** · base / GFP only — are raw features redundant once message passing has used them?
-- [ ] **GIN-7** · none / GFP only — GFP alone vs baseline alone (compare with GIN-1)
+- [x] **GIN-1** · none / base — topology alone, the reference point → `Outputs/GIN/gin_mp-none_readout-base_dir-in/`
+- [x] **GIN-2** · base / base — edge features inside message passing → `Outputs/GIN/gin_mp-base_readout-base_dir-in/`
+- [x] **GIN-3** · none / base+GFP — GFP only at the decision layer → `Outputs/GIN/gin_mp-none_readout-full_dir-in/`
+- [x] **GIN-4** · base+GFP / base+GFP — GFP everywhere → `Outputs/GIN/gin_mp-full_readout-full_dir-in/`
+- [x] **GIN-5** · base / base+GFP — GFP at the decision layer only → `Outputs/GIN/gin_mp-base_readout-full_dir-in/`
+- [x] **GIN-6** · base / GFP only — are raw features redundant once message passing has used them? → `Outputs/GIN/gin_mp-base_readout-gfp_dir-in/`
+- [x] **GIN-7** · none / GFP only — GFP alone vs baseline alone (compare with GIN-1) → `Outputs/GIN/gin_mp-none_readout-gfp_dir-in/`
 
 ### PNA family
 
@@ -135,8 +135,10 @@ passing / which the final classifier sees. "base" = 20 baseline, "base+GFP" = al
 
 *Newest first. Unticked = in progress · ticked = finished and synced.*
 
-- [ ] **26 Sep** — GIN batch (GIN-1 … GIN-5) retraining on Kaggle under the full evaluation
-      protocol; results, curves and predictions expected today
+- [ ] **26 Sep** — GATv2 operator in `gnn_core.py` (+ optional gradient accumulation, default off);
+      `GAT_fixed_architecture.ipynb` ready with the seven configs, batch not yet run
+- [x] **26 Sep** — GIN batch (GIN-1 … GIN-7) trained on Kaggle under the full evaluation
+      protocol; results, curves and predictions in `Outputs/GIN/`, table in `Progress_Report.md` §7.1
 - [x] **26 Sep** — shared code moved to `gnn_core.py`; GIN notebook on the full evaluation
       protocol (all splits, top-5 % metrics, saved threshold, best-epoch line, saved predictions)
 - [x] **23 Sep** — first GIN-family batch (5 runs) at width 128 — superseded by the 26 Sep retrain

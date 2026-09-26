@@ -15,6 +15,12 @@ Full write-up of the work so far: **[Progress_Report.md](Progress_Report.md)**.
 | `GFP_experiments.ipynb` | `graph_feature_preprocessor` | Four GFP parameter variants (win48, win120, lc10, rich) with data-driven rationale |
 | `Data_checks.ipynb` | `graph_feature_preprocessor` | Shows what every artifact in `Data/` is and looks like, and verifies it (row counts, alignment, leakage properties, graph consistency) with a summary table |
 | `GIN_fixed_architecture.ipynb` | Kaggle (GPU) | GIN edge classifier with a **fixed architecture**; knobs select which edge features enter message passing / the classifier, incoming-only vs bidirectional aggregation, and optional temporal sampling |
+| `GAT_fixed_architecture.ipynb` | Kaggle (GPU) | Same notebook for the GATv2 operator (4 heads × 32 = 128, edge features via `edge_dim`); only the config cell differs — everything shared is imported from `gnn_core.py` |
+
+`gnn_core.py` — everything shared by the operator notebooks: the fixed model template,
+`build_model(operator, …)`, loaders, the training loop with validation threshold sweep, metrics on
+train / val / test, curves, saving and `invariant_params()`. Notebooks only set the operator, the
+config batch and paths.
 
 `run_gfp_wsl.py` — helper that runs IBM SnapML's Graph Feature Preprocessor **inside WSL**
 (the Windows snapml build lacks it), streaming edges in batches of 128 so features stay causal.
@@ -33,8 +39,13 @@ Requires a WSL venv: `python3 -m venv ~/gfp_env && ~/gfp_env/bin/pip install 'nu
 `edge_features.csv` · `node_features.csv` · `feature_meta.json` (feature groups, dims, ablation grid) ·
 `standard_scaler.pkl` · `train/val/test_graph.pt` · `account_to_idx.pkl` · `gfp_variants/*.npy`
 
-## Planned model comparison
+## Model comparison
 
-GBT (LightGBM / XGBoost) and GNNs (GIN+EU, PNA) over the ablation grid
-A (nodes + structure) → B (+ baseline edges) → C (+ GFP) → D (full), and across the five GFP
-variants; minority-class F1 and PR-AUC as metrics.
+One fixed architecture (2 message-passing layers, hidden 128, dropout 0.3, same readout and
+training recipe) trained per operator (GIN/GINE, PNA, GATv2, later a graph transformer) over
+seven feature configurations: which edge features enter message passing (none / 20 baseline /
+81 baseline+GFP) × which the classifier sees (baseline / baseline+GFP / GFP only). Headline
+metric minority-class F1 at a validation-chosen threshold, with PR-AUC and top-5 % recall;
+every metric on train, val and test. Results per family in `Outputs/<FAMILY>/` and in
+[Progress_Report.md](Progress_Report.md) §7.1 (GIN family: best test F1 0.525, baseline
+features in message passing + all 81 features at the readout).

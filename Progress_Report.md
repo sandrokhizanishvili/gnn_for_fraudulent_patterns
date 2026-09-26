@@ -181,31 +181,52 @@ long-window blocks) differ as intended.
 ## 7. Model-Comparison Plan (next stage)
 
 - **Feature ablations** (encoded as `ABLATIONS` in `feature_meta.json`), for every model: (A) node features + structure only, (B) + baseline edge features, (C) + GFP features, (D) full — isolating the uplift of each block. For the GNNs this is refined into a 2-factor grid: which edge features enter **message passing** (none / baseline / baseline+GFP) × which enter the **final classifier** `[h_src, edge, h_dst]` (baseline / baseline+GFP / GFP only). GBT rows are built as edge features + source-node features + destination-node features (entity types).
-- **Fixed-architecture GNN protocol** (`GIN_fixed_architecture.ipynb`): one model class — 2 GIN layers, hidden 128, node MLP `Linear → BatchNorm → ReLU → Linear`, learnable ε, residual, dropout 0.3, `[100,100]` neighbour sampling, `pos_weight` 8, Adam 1e-3, 20 epochs — for every configuration; `GINConv` when no edge features enter message passing, `GINEConv` otherwise (identical node MLPs, only the edge term differs). Each run records an *architecture-invariant parameter count* that must match across feature sets, making comparability verifiable. Additional axes held constant within a comparison: message-passing direction (incoming-only vs incoming + outgoing with separate convs) and optional temporal neighbour sampling.
+- **Fixed-architecture GNN protocol** (`gnn_core.py`, imported by every operator notebook): one model class — 2 GIN layers, hidden 128, node MLP `Linear → BatchNorm → ReLU → Linear`, learnable ε, residual, dropout 0.3, `[100,100]` neighbour sampling, `pos_weight` 8, Adam 1e-3 (weight decay 1e-5), 20 epochs — for every configuration; `GINConv` when no edge features enter message passing, `GINEConv` otherwise (identical node MLPs, only the edge term differs). Each run records an *architecture-invariant parameter count* that must match across feature sets, making comparability verifiable. Additional axes held constant within a comparison: message-passing direction (incoming-only vs incoming + outgoing with separate convs) and optional temporal neighbour sampling.
 - **Models:** gradient-boosted trees (LightGBM/XGBoost per the paper's GBT baselines [[1]](#references)) and GNNs (GIN with edge features, GIN+EU, PNA [[6]](#references)); minority-class F1 as the headline metric, PR-AUC alongside.
 - **GFP variant comparison:** V0–V4 swapped into the same models to rank the parameter choices of §6.2; winning factors may be combined.
 
-### 7.1 First results — GIN family (hidden 128, incoming MP, seed 42)
+### 7.1 Results — GIN family (hidden 128, incoming MP, seed 42; batch of 26 Sep 2026)
 
-Five feature configurations through the identical architecture (`invariant_params` = 67,587 in
-every run; test scored once, at the validation-chosen threshold of the best-val-F1 checkpoint).
-Full artifacts in `Outputs/GIN/`; training logs in the executed `GIN_fixed_architecture.ipynb`.
+Seven feature configurations through the identical architecture (`invariant_params` = 67,587 in
+every run; 20 epochs; threshold chosen on validation; test scored once with the best-val-F1
+checkpoint). Artifacts in `Outputs/GIN/<run>/`, training logs in the executed
+`GIN_fixed_architecture.ipynb`. Ranked by test F1. Precision, recall, PR-AUC, ROC-AUC and
+Recall@5 % are **test** values at the validation-chosen threshold.
 
-| mp / readout | test F1 | Precision | Recall | PR-AUC |
-|---|---|---|---|---|
-| none / base (GIN baseline) | 0.366 | 0.441 | 0.313 | 0.330 |
-| base / base (GINE) | 0.472 | 0.690 | 0.359 | 0.418 |
-| none / full (GIN + GFP readout) | 0.463 | 0.576 | 0.388 | 0.432 |
-| base / full (GINE + GFP readout) | **0.531** | 0.709 | 0.424 | 0.489 |
-| full / full (GINE, GFP everywhere) | 0.530 | **0.820** | 0.391 | **0.492** |
+| Run | mp / readout | best ep | F1 train | F1 val | **F1 test** | Precision | Recall | PR-AUC | ROC-AUC | Recall@5 % |
+|---|---|---|---|---|---|---|---|---|---|---|
+| GIN-5 | base / base+GFP | 8 | 0.534 | 0.609 | **0.525** | 0.678 | 0.429 | 0.484 | 0.980 | 0.867 |
+| GIN-4 | base+GFP / base+GFP | 10 | 0.563 | 0.598 | 0.512 | 0.743 | 0.390 | 0.479 | 0.974 | 0.827 |
+| GIN-3 | none / base+GFP | 11 | 0.453 | 0.548 | 0.471 | 0.635 | 0.375 | 0.435 | 0.980 | 0.861 |
+| GIN-2 | base / base | 15 | 0.548 | 0.554 | 0.456 | 0.659 | 0.348 | 0.392 | 0.961 | 0.771 |
+| GIN-6 | base / GFP only | 19 | 0.526 | 0.533 | 0.440 | 0.507 | 0.388 | 0.395 | 0.961 | 0.770 |
+| GIN-1 | none / base | 13 | 0.432 | 0.439 | 0.371 | 0.481 | 0.302 | 0.328 | 0.972 | 0.814 |
+| GIN-7 | none / GFP only | 20 | 0.273 | 0.319 | 0.256 | 0.265 | 0.248 | 0.198 | 0.941 | 0.731 |
 
-Reading: baseline edge features in message passing lift F1 by +0.106; adding the 61 GFP
-features at the readout lifts a further +0.059–0.097; pushing GFP into message passing too
-adds nothing to F1 (−0.001) — it only trades recall for precision. The best configuration is
-**base features in message passing + all 81 features at the readout**, F1 0.531 = +0.165 over
-the no-edge-feature baseline at identical capacity. This is the thesis's central claim showing
-up under a leak-free, architecture-controlled protocol: manual feature engineering helps, and
-its value concentrates at the decision layer.
+Precision@5 % is 0.016–0.020 for every run and is not shown: at 0.11 % prevalence its ceiling
+is 0.023, so it cannot separate models. Recall@5 % (share of laundering inside the top-5 %
+alerts) is the informative operating-point number. All 21 per-split metrics are in
+`Outputs/GIN/batch_summary.csv`.
+
+**What it means** (single seed, preliminary; the 23 Sep batch of the same five configs landed
+within ±0.02 F1 of these numbers, so differences below ~0.02 are ties):
+
+- **RQ1 — base edge features in message passing help:** +0.085 (GIN-1→2) and +0.054 (GIN-3→5).
+- **RQ2 — GFP features help further, at the readout:** +0.100 on GIN (1→3), +0.069 on GINE
+  (2→5); the best configuration is **+0.154 over the plain baseline** at identical capacity.
+- **Where the GFP uplift lives — the decision layer.** GFP inside message passing too (GIN-4)
+  does not beat GIN-5 (−0.013, a tie) and overfits: validation loss rises from epoch 10 while
+  train PR-AUC keeps climbing (0.62 vs 0.49 on validation at epoch 20).
+- **GFP complements, it does not replace.** GFP alone at the readout (GIN-7, 0.256) is far below
+  the 20 baseline features alone (GIN-1, 0.371), and dropping the baseline features from the
+  readout (GIN-6, 0.440) costs 0.085 against GIN-5. Both GFP-only runs were still improving at
+  epochs 19–20, with high thresholds (0.65–0.69).
+- **Overfitting:** mild for the winner (validation loss flat after epoch 8, train F1 0.534 vs
+  test 0.525); strongest for GIN-4 as above. ROC-AUC is 0.94–0.98 everywhere and uninformative
+  at this imbalance.
+
+Curves of the winner: `Outputs/GIN/gin_mp-base_readout-full_dir-in/curves.png` (dashed line =
+saved checkpoint, epoch 8).
 
 ## 8. Artifact Inventory
 
@@ -215,7 +236,9 @@ its value concentrates at the decision layer.
 | `Data_preparation.ipynb` | executed pipeline of §3–§5 |
 | `GFP_experiments.ipynb` | executed variant generation of §6 |
 | `Data_checks.ipynb` | executed inspection + verification of every artifact (§6.5) |
-| `GIN_fixed_architecture.ipynb` | Kaggle GNN experiment notebook: fixed GIN architecture, feature-set / direction / temporal-sampling knobs (§7) |
+| `gnn_core.py` | shared code for every operator: fixed model template, `build_model(operator, …)`, loaders, training loop with validation threshold sweep, metrics on all splits, curves, saving, `invariant_params()` |
+| `GIN_fixed_architecture.ipynb` | executed Kaggle notebook of the GIN family: config cell (7 runs) + loop over `gnn_core` (§7.1) |
+| `GAT_fixed_architecture.ipynb` | same notebook for the GATv2 operator; only the config cell differs |
 | `run_gfp_wsl.py` | causal batched GFP bridge (Windows → WSL) |
 | `Data/edge_features.csv` | 5,077,237 × (meta + 81 features), pre-normalisation |
 | `Data/node_features.csv`, `Data/account_to_idx.pkl` | node features (6) and account indexing |
@@ -223,7 +246,7 @@ its value concentrates at the decision layer.
 | `Data/standard_scaler.pkl` | train-fit normalisation parameters |
 | `Data/train_graph.pt`, `val_graph.pt`, `test_graph.pt` | cumulative PyG snapshots |
 | `Data/gfp_variants/{win48,win120,lc10,rich}.npy` + `_cols.json` | GFP variant feature blocks |
-| `Outputs/GIN/<run>/` | per-run `results.json`, `history.csv`, `curves.png`, `best.pt` (§7.1) + `batch_summary.csv` |
+| `Outputs/GIN/<run>/` | per-run `results.json` (all splits, all metrics), `history.csv`, `curves.png`, `best.pt`, `predictions.csv` (every scored edge with `edge_id`, `prob`, `pred`; not versioned) + `batch_summary.csv` per batch (§7.1) |
 
 ---
 

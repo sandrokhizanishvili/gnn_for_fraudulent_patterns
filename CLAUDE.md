@@ -67,8 +67,9 @@ Fixed **a priori for ALL runs** (chosen so the 81-dim feature set is never compr
 | Readout | concat `[h_src ‖ h_dst ‖ e_seed]` → Linear 128 → ReLU → Dropout → Linear 1 |
 | Sampling | `LinkNeighborLoader`, [100, 100], batch 8,192 seed edges |
 | Loss / optimiser | `BCEWithLogitsLoss(pos_weight=8)` / Adam 1e-3, cosine, 20 epochs |
+| Gradient accumulation | `ACCUM_STEPS` = 1. GATv2 may use 2 on Kaggle if it runs out of GPU memory: the 8,192 seeds arrive as 2 sampled micro-batches, one optimizer step per 8,192 — same update, recorded as `accum_steps` in `results.json` |
 | Seed | 42 (S4 adds more seeds) |
-| Invariant params (GIN family) | **67,587** — must be identical across feature configs; verify every run |
+| Invariant params | GIN family **67,587** · GATv2 family **67,585** — must be identical across feature configs within a family; verify every run |
 
 **The only things that may change between runs are the knobs:**
 `OPERATOR` (gin | pna | gat | transformer) · `MP_EDGE_FEATS` (none | base | full) ·
