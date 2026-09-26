@@ -1,0 +1,43 @@
+{
+  "run": "gin_mp-full_readout-full_dir-in",
+  "operator": "gin",
+  "mp": "full",
+  "readout": "full",
+  "mp_direction": "in",
+  "temporal_sampling": false,
+  "seed": 42,
+  "best_epoch": 10,
+  "threshold": 0.567947268486023,
+  "params": 131843,
+  "invariant_params": 67587,
+  "train_f1": 0.5633875548670282,
+  "train_precision": 0.692258883248731,
+  "train_recall": 0.47496734871571616,
+  "train_pr_auc": 0.5455185346322682,
+  "train_roc_auc": 0.9908330358834104,
+  "train_precision_at_5pct": 0.013997032524061502,
+  "train_recall_at_5pct": 0.9281671745755333,
+  "val_f1": 0.5976331360946746,
+  "val_precision": 0.8305921052631579,
+  "val_recall": 0.466728280961183,
+  "val_pr_auc": 0.5379373343853332,
+  "val_roc_auc": 0.9793359226504242,
+  "val_precision_at_5pct": 0.01784412975400311,
+  "val_recall_at_5pct": 0.8373382624768947,
+  "test_f1": 0.5117613310384395,
+  "test_precision": 0.7433333333333333,
+  "test_recall": 0.3902012248468941,
+  "test_pr_auc": 0.47908885753183733,
+  "test_roc_auc": 0.9739706154380228,
+  "test_precision_at_5pct": 0.018612254544738346,
+  "test_recall_at_5pct": 0.8267716535433071,
+  "architecture": {
+    "hidden": 128,
+    "layers": 2,
+    "dropout": 0.3,
+    "neighbors": [
+      100,
+      100
+    ]
+  }
+}
