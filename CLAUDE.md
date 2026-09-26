@@ -24,7 +24,7 @@ find laundering patterns" question is the thesis; feature engineering is the met
 probe it. Do not describe the thesis as only a feature-engineering study.
 
 Extends my Graph Mining course project (`../AML_GNN_GMA/`, LI-Small) — but that pipeline is
-**not ground truth**: several parts were re-tested and revised (see `Progress_Report.md` §4.3, §5.2).
+**not ground truth**: several parts were re-tested and revised (see the two snapml pitfalls in `Progress_Report.md` §3).
 
 **Dataset:** IBM AML **HI-Small** (Altman et al., NeurIPS 2023), truncated at Sep 10 2022.
 5,077,237 transactions · 4,522 laundering (0.089%) · 515,070 accounts · 370 annotated attempts,
@@ -32,19 +32,20 @@ Extends my Graph Mining course project (`../AML_GNN_GMA/`, LI-Small) — but tha
 
 **Task:** edge classification — nodes = accounts, edges = transactions, directed temporal multigraph.
 
-**Research questions (RQ1–RQ4) and the 18-run grid** are defined in `EXPERIMENTS.md`. That file
-is the single source of truth for what is planned, running, and done.
+**The experiment grid (7 feature configs × 4 operators, plus data variants and cross-checks)** is
+defined in `EXPERIMENTS.md`. That file is the single source of truth for what is planned, running,
+and done.
 
 ## 2. Source-of-truth documents — read before acting, keep in sync
 
 | Document | Role |
 |---|---|
 | `EXPERIMENTS.md` | Experiment plan + run tracker: **status and pointers only, no numbers**. Read first for any modelling task. |
-| `Progress_Report.md` | Detailed write-up of everything done (data, features, leakage findings) and **the only home of results tables, curves and interpretation**. |
+| `Progress_Report.md` | Markdown mirror of the Notion documentation page (**Notion is the main copy**): data, features, GFP, models, protocol, results tables with curves and interpretation, repository map, plus the reference list. Same section numbers as Notion. |
 | `README.md` | Public repo summary: notebooks, graph stats, outputs. |
 | GitHub | https://github.com/sandrokhizanishvili/gnn_for_fraudulent_patterns |
-| Notion "experiments" page | Mirror of `EXPERIMENTS.md` as a task list — https://app.notion.com/p/gnn_for_fraudulent_patterns-experiments-3e011ae27ef280889f9cd78f4cfb1a78 |
-| Notion "documentation" page | Mirror of `Progress_Report.md`, condensed — https://app.notion.com/p/gnn_for_fraudulent_patterns-documentation-3e011ae27ef2807cb4dfc9582cf70298 |
+| Notion "experiments" page | Same content as `EXPERIMENTS.md`, kept in sync — https://app.notion.com/p/gnn_for_fraudulent_patterns-experiments-3e011ae27ef280889f9cd78f4cfb1a78 |
+| Notion "documentation" page | **Main copy** of the write-up; `Progress_Report.md` mirrors it — https://app.notion.com/p/gnn_for_fraudulent_patterns-documentation-3e011ae27ef2807cb4dfc9582cf70298 |
 
 **Consistency rule:** a fact (a metric, a dimension, a count, a hyperparameter, a run status)
 must never differ between these documents. When you change one, update the others in the same
@@ -68,7 +69,7 @@ Fixed **a priori for ALL runs** (chosen so the 81-dim feature set is never compr
 | Sampling | `LinkNeighborLoader`, [100, 100], batch 8,192 seed edges |
 | Loss / optimiser | `BCEWithLogitsLoss(pos_weight=8)` / Adam 1e-3, cosine, 20 epochs |
 | Gradient accumulation | `ACCUM_STEPS` = 1. GATv2 may use 2 on Kaggle if it runs out of GPU memory: the 8,192 seeds arrive as 2 sampled micro-batches, one optimizer step per 8,192 — same update, recorded as `accum_steps` in `results.json` |
-| Seed | 42 (S4 adds more seeds) |
+| Seed | 42 (seed sweep on the winning runs later; see "Cross-checks" in `EXPERIMENTS.md`) |
 | Invariant params | GIN family **67,587** · GATv2 family **67,585** — must be identical across feature configs within a family; verify every run |
 
 **The only things that may change between runs are the knobs:**
@@ -84,9 +85,10 @@ silent edit to an existing run.
 
 ## 3b. Planned extensions — pointer
 
-Block 3 (RWPE / Node2Vec), the transformer operator and the GFP variants (S2) are specified in
-**`EXPERIMENTS.md` → "Planned extensions"** and the Notion experiments page, including the
-reasoning behind every size. Do not restate them here. Rules that apply when implementing:
+RWPE / Node2Vec node encodings, the transformer operator and the GFP variants are specified in
+**`EXPERIMENTS.md`** (sections 1–2 and the appendix "Fixed sizes for the planned extensions")
+and on the Notion experiments page, including the reasoning behind every size. Do not restate
+them here. Rules that apply when implementing:
 - Their sizes (k = 8, dim 8, 4 heads × 32) are fixed a priori — never tune them per run.
 - Plan in `EXPERIMENTS.md` + Notion first, get my OK, then the notebook.
 - RWPE: reuse `add_rwpe()` from `../AML_GNN_GMA/gine_rwpe.ipynb`.
@@ -142,7 +144,7 @@ without an explicit request. Known invariants:
   train rows; smoothing m = 200.
 - **Normalisation** fit on train only (`standard_scaler.pkl`). GFP variants (win48 / win120 /
   lc10 / rich) in `Data/gfp_variants/` are swappable into `edge_attr[:, 20:81]` after the same
-  train-fit recipe (experiment S2).
+  train-fit recipe (the "GFP with data-tuned windows" item in `EXPERIMENTS.md`).
 - Any change that could let future information reach training is a bug. Flag it explicitly.
   If results look too good (big jumps, val ≫ train, near-perfect scores), suspect leakage first.
 
@@ -171,7 +173,7 @@ Run name: `<model>_mp-<mp>_readout-<ro>_dir-<dir>[_enc-<enc>][_gfp-<variant>][_t
 `results/` holds only the archived hidden-64 reference of Run 1 (superseded; keep it).
 
 After a run finishes: mark its row ✅ in `EXPERIMENTS.md` with the `Outputs/` pointer (no
-metrics there); put the numbers, curves and RQ interpretation in `Progress_Report.md` §7–8;
+metrics there); put the numbers, curves and RQ interpretation in `Progress_Report.md` §7 (and the Notion documentation page);
 mirror both to their Notion pages. Mark superseded rows `SUPERSEDED`, never delete them.
 
 ## 7. Repository conventions
@@ -250,24 +252,58 @@ mirror both to their Notion pages. Mark superseded rows `SUPERSEDED`, never dele
 ## 8. `Progress_Report.md` and the Notion pages — writing style
 
 These are **working documents**, not the thesis. The LaTeX thesis (academic tone) comes at the
-end, in Overleaf. Until then:
+end, in Overleaf. Until then, write them so that a colleague who has never seen the project
+understands each section in one read.
 
-- **Plain English, short.** Bullet points over paragraphs. One idea per bullet. Tables for
-  anything with numbers. No sentence that just restates a table.
+### How to write
+
+- **Plain English.** Short sentences, everyday words. Say "we removed the last week of data
+  because it has almost no normal transactions", not "temporal truncation was applied to
+  mitigate distributional artefacts". If a sentence needs a second read, rewrite it.
+- **No filler and no hedging language.** Cut "it is worth noting that", "in order to",
+  "leverage", "utilise", "robust", "comprehensive", "novel", "significantly" (unless there is
+  a test), "state-of-the-art". Just state the thing.
+- **One idea per bullet, one line per bullet.** If a bullet wraps to three lines, split it or
+  turn it into a table row.
+- **Numbers live in tables, never in prose.** Text says what a table shows ("GFP at the readout
+  gives the biggest gain"); the table holds the values. A number appears in exactly one place.
+- **Say what was done and what it means, in that order.** "What: X. Why: Y. Result: Z." is a
+  fine skeleton for any subsection. Do not narrate the process ("first we tried… then we…").
+- **Honest verbs.** "shows", "suggests", "we could not tell" — not "proves", "demonstrates
+  clearly", "confirms". Ties within seed noise are called ties.
+- **Explain jargon once, at first use, in brackets:** "GFP (pre-computed graph-pattern
+  features)", "readout (the final classifier)". After that, use the short name.
+- **Before / after examples** of the target style:
+  - ✗ "The single-batch fit_transform paradigm was found to induce temporal leakage."
+    ✓ "Running GFP on the whole dataset at once leaks the future: an account's first
+    transaction already sees its later ones. We fixed it by streaming edges in batches of 128."
+  - ✗ "GATv2 leverages an attention mechanism to adaptively weight neighbour contributions."
+    ✓ "GATv2 learns which neighbours matter and weights them accordingly."
+  - ✗ "Results demonstrate a significant uplift attributable to structural features."
+    ✓ "Adding GFP features at the readout raises test F1 from 0.47 to 0.53 (single seed)."
+
+### Structure
+
+- **Notion is the main copy.** Edit the Notion page first (or at the same time), then mirror
+  the change into `Progress_Report.md` with the same section numbers.
 - **Fixed section order** (keep it, so readers always know where to look):
-  1. **What & why** — thesis question and RQ1–RQ4 (5 lines max)
-  2. **Data** — one table (counts, split windows, imbalance) + the truncation decision
-  3. **Features** — baseline 20 / GFP 61 / node 6, each block one table: feature → evidence
-  4. **Leakage & verification** — the findings and the fix, as bullets
-  5. **Fixed architecture & protocol** — one diagram, one table of fixed values, the knobs
-  6. **Results** — one ranked table per family, all splits; then "what it means" as
-     ≤ 5 bullets tied to the RQs; curves of the winner
-  7. **Open items** — pointer to `EXPERIMENTS.md`, nothing duplicated
-  8. **Artifact inventory** — file → content
-- **Every number has a home.** A metric appears in exactly one table; text refers to it,
-  never repeats it with different rounding.
+  0. **Overview** — thesis question, one short paragraph, links to the repo and the task list
+  1. **Dataset** — one property → value table (counts, time span, imbalance, typologies)
+  2. **Features** — node features table, baseline edge features table (feature → what →
+     how computed → evidence), dropped features, one leakage rule
+  3. **GFP configuration & variants** — one table: feature group × (V0, variants), why the
+     variants, the two snapml pitfalls
+  4. **Graph & splits** — one table with edges, evaluated edges, windows, laundering per split
+  5. **Models — four operators** — one table of fixed values + knobs, then one subsection per
+     operator (rule, edge features, invariant params, status)
+  6. **Evaluation protocol** — bullets + one metrics table (metric → what → role)
+  7. **Results — message passing × data variants** — per family: one subsection per run
+     (metrics table on all splits + curves), then "Best of the family" with the ranked table
+     and ≤ 3 verdict bullets tied to the thesis question
+  8. **Repository map** — file → content
+- **Each section opens with one line** saying what it contains. No section longer than a
+  screen; split into a table or move detail to the notebook.
 - **Mark status honestly:** ✅ done · 🔄 running · ⬜ todo · *SUPERSEDED* — never delete history.
-- When a section grows beyond a screen, split it into a table or move detail to the notebook.
 
 ## 9. How to work with me
 

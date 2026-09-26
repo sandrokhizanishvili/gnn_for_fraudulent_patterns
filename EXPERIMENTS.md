@@ -54,7 +54,7 @@ dropout 0.3, identical training recipe — so only the aggregation rule differs.
 - [ ] **Graph Transformer** — attention with edge features over the sampled neighbourhood ·
       `TRANSFORMER_fixed_architecture.ipynb` · 7 runs
 
-**Two extra questions about message passing itself**
+**Two extra questions about message passing itself (optional)**
 
 - [ ] **Direction** — does the network also need to see outgoing money? Best model re-run with
       bidirectional aggregation
