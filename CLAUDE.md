@@ -39,8 +39,8 @@ is the single source of truth for what is planned, running, and done.
 
 | Document | Role |
 |---|---|
-| `EXPERIMENTS.md` | Experiment plan + run tracker. Read first for any modelling task. |
-| `Progress_Report.md` | Detailed write-up of everything done (data, features, leakage findings, results). |
+| `EXPERIMENTS.md` | Experiment plan + run tracker: **status and pointers only, no numbers**. Read first for any modelling task. |
+| `Progress_Report.md` | Detailed write-up of everything done (data, features, leakage findings) and **the only home of results tables, curves and interpretation**. |
 | `README.md` | Public repo summary: notebooks, graph stats, outputs. |
 | GitHub | https://github.com/sandrokhizanishvili/gnn_for_fraudulent_patterns |
 | Notion "experiments" page | Mirror of `EXPERIMENTS.md` as a task list — https://app.notion.com/p/gnn_for_fraudulent_patterns-experiments-3e011ae27ef280889f9cd78f4cfb1a78 |
@@ -169,9 +169,9 @@ Run name: `<model>_mp-<mp>_readout-<ro>_dir-<dir>[_enc-<enc>][_gfp-<variant>][_t
 (optional parts only when the knob is not at its default).
 `results/` holds only the archived hidden-64 reference of Run 1 (superseded; keep it).
 
-After a run finishes: add/update its row in `EXPERIMENTS.md` (status, test F1, PR-AUC,
-best epoch), update the results table and "first answers" there and in `Progress_Report.md`,
-and prepare the Notion text. Mark superseded rows `SUPERSEDED`, never delete them.
+After a run finishes: mark its row ✅ in `EXPERIMENTS.md` with the `Outputs/` pointer (no
+metrics there); put the numbers, curves and RQ interpretation in `Progress_Report.md` §7–8;
+mirror both to their Notion pages. Mark superseded rows `SUPERSEDED`, never delete them.
 
 ## 7. Repository conventions
 
@@ -206,8 +206,7 @@ and prepare the Notion text. Mark superseded rows `SUPERSEDED`, never delete the
   3. I commit + push the Kaggle results (`Outputs/<FAMILY>/<run>/results.json`, `history.csv`,
      `curves.png`, `batch_summary.csv`) and pull them locally.
   4. Claude Code reads the results and updates `EXPERIMENTS.md`, `Progress_Report.md`, Notion.
-  So: never claim a run "is done" from an edit; when a change needs re-scoring saved
-  checkpoints, write the re-score cell and tell me to run it on Kaggle. Keep every notebook
+  So: never claim a run "is done" from an edit. Keep every notebook
   runnable top-to-bottom on a fresh Kaggle kernel (paths, installs).
 - **Verify locally before hand-off (CPU, no GPU here).** Before giving me a notebook to run on
   Kaggle, make sure it actually works: run it end-to-end yourself on a tiny slice of the data

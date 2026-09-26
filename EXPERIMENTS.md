@@ -1,141 +1,177 @@
-# Experiment Plan — GNN for Fraudulent Pattern Detection
+# Experiments — GNN for Fraudulent Pattern Detection
 
-**Thesis idea:** does manual feature engineering help Graph Neural Networks detect money
-laundering? The study adds engineered features (baseline transaction features, and the GFP
-structural features in particular) to otherwise identical models, across several GNN variants,
-to identify the best-working model + feature combination for AML.
+**Thesis question:** how are Graph Neural Networks able to identify fraudulent (money-laundering)
+patterns in a transaction network?
 
-**Research questions:**
-- **RQ1 — Do edge features help GNNs?** Within each block, the with/without-edge-features
-  pairs (runs 1↔2, 3↔4, 5↔6 and 7↔8, 9↔10, 11↔12) differ only in whether transaction
-  features enter message passing.
-- **RQ2 — Do GFP structural features improve detection further?** Every Block 1 run vs its
-  Block 2 twin — same model, only the feature set gains the 61 GFP columns.
-- **RQ3 — Operator choice:** which GNN variant (GIN/GINE, PNA, GATv2) works best under the
-  same capacity budget, and does the answer change once engineered features are present?
-- **RQ4 — Best AML variant:** which model × feature combination wins overall — including
-  whether a GBT on the same features matches the best GNN (S3), and whether tuning the GFP
-  windows to the data beats the paper's config (S2)?
+**How we test it:** the same fixed-size GNN is trained many times; only two things change —
+**what data goes in** (section 1) and **how the network aggregates neighbours** (section 2).
+Each combination is one **run** (section 3). If a run scores better, the credit goes to the data
+or the operator, never to a bigger model.
 
-Master thesis experiment tracker. Dataset: IBM AML **HI-Small**, truncated to Sep 1–10 2022
-(5,077,237 transactions, 4,522 laundering, 60/20/20 temporal split).
+Results and numbers → `Progress_Report.md` and the Notion documentation page.
+Mirrored on the Notion experiments page (kept in sync).
 
-**Protocol for every run:** threshold chosen on validation, best-val-F1 checkpoint, test scored
-once; headline metric minority-class F1, with PR-AUC / ROC-AUC / precision / recall alongside.
-
-**Architecture rule:** 2 message-passing layers, **hidden 128**, dropout 0.3 (128 rather than the paper's 64 so the 81-dim feature set is never compressed in message passing; fixed a priori for ALL runs), same readout MLP and
-training recipe for every model — no dimension or layer changes, ever. Adding features changes
-only input-projection widths. Within a family the invariant-parameter count must match exactly;
-across families dims/depth are equal but operators differ (both counts recorded per run).
-
-**Status:** ✅ done · 🔄 running · ⬜ todo
+*A box is ticked when the results are pushed to GitHub and the documentation is updated.*
 
 ---
 
-## Phase 0 — Data pipeline (complete)
+## Now
 
-- ✅ EDA with day-specific USD conversion (`EDA.ipynb`)
-- ✅ Data preparation: truncation, 20 baseline edge features, 6 node features, causal bank
-  target encoding, 61 causal GFP features, normalization, PyG snapshots
-- ✅ GFP parameter variant blocks win48 / win120 / lc10 / rich
-- ✅ Artifact verification, 61 checks (`Data_checks.ipynb`)
-- ✅ Fixed-architecture GIN notebook (feature / direction / temporal knobs, overfitting diagnostics)
+- [ ] 🔄 GIN batch (GIN-1 … GIN-5) retrained under the full evaluation protocol — Kaggle, started 26 Sep
+- [ ] GIN-6 and GIN-7 (second small batch)
+- [ ] PNA notebook + batch (7 runs)
+- [ ] GATv2 notebook + batch (7 runs)
 
 ---
 
-## Block 1 — Baseline features (readout sees the 20 baseline features)
+## 1 · Data — what goes into the model
 
-| # | Model | Message passing | Question | Status |
-|---|---|---|---|---|
-| 1 | GIN | node features only | topology alone, sum aggregation | 🔄 re-run at hidden 128 (hidden-64 reference: test F1 0.385 · PR-AUC 0.314, archived) |
-| 2 | GINE | + 20 base edge feats | edge features inside sum MP | ⬜ |
-| 3 | PNA | node features only | multi-aggregator MP | ⬜ (needs PNA/GAT added to the notebook) |
-| 4 | PNA | + 20 base edge feats | edge features inside PNA | ⬜ |
-| 5 | GATv2 | node features only | attention aggregation | ⬜ |
-| 6 | GATv2 | + 20 base edge feats | edge features inside attention | ⬜ |
+Dataset: IBM AML **HI-Small** (synthetic bank transactions, 5.08 M transactions, 0.09 %
+laundering). Each transaction is an edge, each account a node.
 
-## Block 2 — GFP variants of the same six (feature set = base + 61 GFP)
-
-| # | Model | Message passing | Status |
-|---|---|---|---|
-| 7 | GIN | node features only, readout base+GFP | ⬜ |
-| 8 | GINE | + 81 feats in MP and readout | ⬜ |
-| 9 | PNA | node features only, readout base+GFP | ⬜ |
-| 10 | PNA | + 81 feats in MP and readout | ⬜ |
-| 11 | GATv2 | node features only, readout base+GFP | ⬜ |
-| 12 | GATv2 | + 81 feats in MP and readout | ⬜ |
-| 13 | GINE | + 20 base feats in MP, readout = embeddings + GFP only (61) | ⬜ |
-| 14 | PNA | + 20 base feats in MP, readout = embeddings + GFP only (61) | ⬜ |
-| 15 | GATv2 | + 20 base feats in MP, readout = embeddings + GFP only (61) | ⬜ |
-| 16 | GINE | + 20 base in MP, readout = base+GFP (81) | ⬜ |
-| 17 | PNA | + 20 base in MP, readout = base+GFP (81) | ⬜ |
-| 18 | GATv2 | + 20 base in MP, readout = base+GFP (81) | ⬜ |
-
-Runs 16–18 add **GFP at the readout only** (base features stay in MP): between run 2 and
-run 8 two things change at once — these isolate whether the GFP uplift comes from the decision
-layer or from message passing.
-
-Runs 13–15 are the **split-roles** variant: message passing digests the raw transaction
-attributes into the embeddings, the classifier sees only `[h_src, h_dst, GFP]` — do raw
-features become redundant at the decision layer once MP has consumed them?
-
-**Together: a 3 × 2 × 2 factorial (operator × edge-feats-in-MP × GFP) plus the split-roles
-variant — the uplift of each manually engineered feature block per operator family, under a
-fixed architecture.**
-
-Infrastructure: ⬜ extend `GIN_fixed_architecture.ipynb` with an `OPERATOR = gin | pna | gat`
-knob (same layer structure; only the conv swaps).
+- [x] **Baseline edge features** (20 per transaction) — amount, timing, bank, payment format
+- [x] **GFP structural edge features** (61 per transaction) — pre-computed graph patterns around
+      the transaction (cycles, fan-in/out, scatter-gather, degree statistics), IBM's Graph Feature
+      Preprocessor with the paper's default windows
+- [x] **Node features** (6 per account) — account entity type
+- [ ] **GFP with data-tuned windows** — four alternative settings (longer windows, longer cycles,
+      extra statistics) are computed; retrain the best model with each to see if they beat the
+      paper's defaults
+- [ ] **RWPE node encoding** (8 per account) — random-walk return probabilities that tell the
+      network where an account sits in the graph; retrain the best model per operator with it
+- [ ] **Node2Vec node encoding** (8 per account) — learned alternative to RWPE, if time allows
 
 ---
 
-## Secondary experiments
+## 2 · Message passing — how the model processes it
 
-### S1 — Direction ablation
-- ⬜ best model from Blocks 1–2 re-run with bidirectional MP (second conv over reversed edges)
-- *Does seeing outgoing money help? Fan-out is invisible to incoming-only aggregation.*
+All operators share one code file (`gnn_core.py`) and one fixed template — 2 layers, width 128,
+dropout 0.3, identical training recipe — so only the aggregation rule differs.
 
-### S2 — GFP parameter variants
-- ⬜ prep: normalize win48 / win120 / lc10 / rich with the train-fit recipe (swap `edge_attr[:, 20:81]`)
-- ⬜ best model re-run with each variant (4 runs)
-- *Do data-driven windows beat the paper's config? Correlation analysis says yes (+0.064 → +0.097).*
+- [x] **GIN / GINE** — sums neighbour messages · `GIN_fixed_architecture.ipynb` · 7 runs
+- [ ] **PNA** — several aggregators at once (mean, max, min, std) · `PNA_fixed_architecture.ipynb` · 7 runs
+- [ ] **GATv2** — attention decides which neighbours matter · `GAT_fixed_architecture.ipynb` · 7 runs
+- [ ] **Graph Transformer** — attention with edge features over the sampled neighbourhood ·
+      `TRANSFORMER_fixed_architecture.ipynb` · 7 runs
 
-### S3 — GBT baselines (LightGBM / XGBoost)
-- ⬜ `GBT_baselines.ipynb`: rows = edge + src-node + dst-node features; feature sets base vs base+GFP (vs gfp-only)
-- ⬜ GFP variant comparison in GBT (cheap cross-check of S2)
-- *Does message passing add anything beyond engineered features? (paper: GFP+GBT ≥ GNN)*
+**Two extra questions about message passing itself**
 
-### S4 — Seeds & robustness
-- ⬜ 3–4 seeds on headline runs (block winners, S1–S3 winners); report mean ± std
-- *Differences within seed spread are ties.*
-
-### S5 — Temporal causal sampling (optional)
-- ⬜ pyg-lib on Kaggle, then best model with `TEMPORAL_SAMPLING` on vs off
-- *Features are causal; default neighbour sampling is not. How much does honesty cost?*
+- [ ] **Direction** — does the network also need to see outgoing money? Best model re-run with
+      bidirectional aggregation
+- [ ] **Causal sampling** (optional) — sample only earlier neighbours; how much does strict
+      honesty cost?
 
 ---
 
-## Analysis
+## 3 · Runs — Data × Message passing
 
-- ⬜ A1 — aggregation: one table + plots across all runs (`results/` → comparison notebook)
-- ⬜ A2 — per-typology recall: join test predictions to `HI-Small_Patterns.txt` — which of the
-  8 laundering patterns does each model catch (cycles vs fan-in vs stack …)?
-- ⬜ A3 — error analysis of the best model: FP/FN by amount band, payment format, bank risk, degree
-- ⬜ A4 — operating points: precision@K, recall at fixed precision (deployment view)
+*Each family runs the same seven feature configurations: which edge features enter message
+passing / which the final classifier sees. "base" = 20 baseline, "base+GFP" = all 81,
+"GFP only" = 61, "none" = topology only. Pointer = result folder once done.*
 
-## Writing
+### GIN family
 
-- ⬜ W1 — data & methodology chapters (reuse `Progress_Report.md`)
-- ⬜ W2 — experiments & results chapter (A1 tables, architecture diagrams done)
-- ⬜ W3 — discussion: leakage findings (single-batch GFP, `time_window` cap), fixed-architecture
-  methodology, limitations (synthetic data, single dataset, fixed capacity)
+- [ ] 🔄 **GIN-1** · none / base — topology alone, the reference point → `Outputs/GIN/gin_mp-none_readout-base_dir-in/`
+- [ ] 🔄 **GIN-2** · base / base — edge features inside message passing → `Outputs/GIN/gin_mp-base_readout-base_dir-in/`
+- [ ] 🔄 **GIN-3** · none / base+GFP — GFP only at the decision layer → `Outputs/GIN/gin_mp-none_readout-full_dir-in/`
+- [ ] 🔄 **GIN-4** · base+GFP / base+GFP — GFP everywhere → `Outputs/GIN/gin_mp-full_readout-full_dir-in/`
+- [ ] 🔄 **GIN-5** · base / base+GFP — GFP at the decision layer only → `Outputs/GIN/gin_mp-base_readout-full_dir-in/`
+- [ ] **GIN-6** · base / GFP only — are raw features redundant once message passing has used them?
+- [ ] **GIN-7** · none / GFP only — GFP alone vs baseline alone (compare with GIN-1)
+
+### PNA family
+
+- [ ] **PNA-1** · none / base
+- [ ] **PNA-2** · base / base
+- [ ] **PNA-3** · none / base+GFP
+- [ ] **PNA-4** · base+GFP / base+GFP
+- [ ] **PNA-5** · base / base+GFP
+- [ ] **PNA-6** · base / GFP only
+- [ ] **PNA-7** · none / GFP only
+
+### GATv2 family
+
+- [ ] **GAT-1** · none / base
+- [ ] **GAT-2** · base / base
+- [ ] **GAT-3** · none / base+GFP
+- [ ] **GAT-4** · base+GFP / base+GFP
+- [ ] **GAT-5** · base / base+GFP
+- [ ] **GAT-6** · base / GFP only
+- [ ] **GAT-7** · none / GFP only
+
+### Transformer family
+
+- [ ] **TR-1** · none / base
+- [ ] **TR-2** · base / base
+- [ ] **TR-3** · none / base+GFP
+- [ ] **TR-4** · base / base+GFP
+- [ ] **TR-5** · base+GFP / base+GFP
+- [ ] **TR-6** · base / GFP only
+- [ ] **TR-7** · none / GFP only
+
+### Cross-checks (optional)
+
+- [ ] **Gradient-boosted trees** on the same features, no graph — does message passing add
+      anything beyond engineered features?
+- [ ] **Seeds** — 3–4 random seeds on the winning runs, mean ± std; differences inside the seed
+      spread count as ties
 
 ---
 
-## Standing rules
+## 4 · Analysis & writing
 
-1. Only the operator / feature / direction / temporal knobs change between runs — never dims,
-   depth, hyperparameters or protocol; verify `invariant_params` within each family.
-2. Every completed run: `results.json`, `history.csv`, `curves.png` (ideally the executed
-   notebook) into `results/`, named `<model>_mp-<mp>_readout-<ro>_dir-<dir>[_temporal]_seed<k>`.
-3. Test is scored once per run with the validation-chosen checkpoint and threshold; no
-   decisions are ever made on test.
+- [ ] One comparison table + plots across all runs
+- [ ] **Per-typology recall** — which of the 8 laundering patterns (cycle, fan-in, stack …) each
+      model actually catches; this answers the thesis question directly
+- [ ] Error analysis of the best model — what it gets wrong and why
+- [ ] Operating points — precision at a fixed alert budget, recall at fixed precision
+- [ ] Thesis chapter: data & methodology
+- [ ] Thesis chapter: experiments & results
+- [ ] Thesis chapter: discussion — leakage findings, fixed-architecture method, limitations
+
+---
+
+## Log
+
+*Newest first. Unticked = in progress · ticked = finished and synced.*
+
+- [ ] **26 Sep** — GIN batch (GIN-1 … GIN-5) retraining on Kaggle under the full evaluation
+      protocol; results, curves and predictions expected today
+- [x] **26 Sep** — shared code moved to `gnn_core.py`; GIN notebook on the full evaluation
+      protocol (all splits, top-5 % metrics, saved threshold, best-epoch line, saved predictions)
+- [x] **23 Sep** — first GIN-family batch (5 runs) at width 128 — superseded by the 26 Sep retrain
+- [x] **Sep** — data pipeline complete: EDA, 20 + 61 + 6 features, causal GFP computation, four
+      GFP variants, 61 verification checks
+
+---
+
+## Appendix — technical details for the code (not on the Notion page)
+
+**Knobs** (the only things that change between runs): `OPERATOR` (gin | pna | gat | transformer) ·
+`MP_EDGE_FEATS` (none | base | full) · `READOUT_EDGE_FEATS` (base | full | gfp) ·
+`NODE_ENC` (none | rwpe | node2vec) · `GFP_VARIANT` (v0 | win48 | win120 | lc10 | rich) ·
+`MP_DIRECTION` (in | bidirectional) · `TEMPORAL_SAMPLING` (on | off).
+
+**Config order per family** (`CONFIGS` in every operator notebook, in this order):
+
+| # | `mp` | `readout` |
+|---|---|---|
+| 1 | none | base |
+| 2 | base | base |
+| 3 | none | full |
+| 4 | full | full |
+| 5 | base | full |
+| 6 | base | gfp |
+| 7 | none | gfp |
+
+**Fixed sizes for the planned extensions** (chosen a priori, never tuned): RWPE k = 8 (covers
+the GFP cycle limit of 6 with margin; matches the course project); Node2Vec dim = 8 (matched to
+RWPE so the comparison is about the kind of encoding, trained on the train graph only, zero
+vector for unseen accounts); Transformer = PyG `TransformerConv`, 4 heads × 32 = 128 (mirrors
+GATv2 so only the attention mechanism differs; local attention over the sampled `[100, 100]`
+neighbourhood). GFP variants are swapped into `edge_attr[:, 20:81]` after the same train-fit
+normalisation. RWPE on the val/test snapshots sees later edges than a seed edge — same caveat
+as neighbour sampling; reported as a limitation.
+
+**Protocol, architecture, artifacts and standing rules:** see `CLAUDE.md` §3–§6. Nothing is
+"done" until results are pushed and this file, `Progress_Report.md` and both Notion pages agree.

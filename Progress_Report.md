@@ -185,6 +185,28 @@ long-window blocks) differ as intended.
 - **Models:** gradient-boosted trees (LightGBM/XGBoost per the paper's GBT baselines [[1]](#references)) and GNNs (GIN with edge features, GIN+EU, PNA [[6]](#references)); minority-class F1 as the headline metric, PR-AUC alongside.
 - **GFP variant comparison:** V0–V4 swapped into the same models to rank the parameter choices of §6.2; winning factors may be combined.
 
+### 7.1 First results — GIN family (hidden 128, incoming MP, seed 42)
+
+Five feature configurations through the identical architecture (`invariant_params` = 67,587 in
+every run; test scored once, at the validation-chosen threshold of the best-val-F1 checkpoint).
+Full artifacts in `Outputs/GIN/`; training logs in the executed `GIN_fixed_architecture.ipynb`.
+
+| mp / readout | test F1 | Precision | Recall | PR-AUC |
+|---|---|---|---|---|
+| none / base (GIN baseline) | 0.366 | 0.441 | 0.313 | 0.330 |
+| base / base (GINE) | 0.472 | 0.690 | 0.359 | 0.418 |
+| none / full (GIN + GFP readout) | 0.463 | 0.576 | 0.388 | 0.432 |
+| base / full (GINE + GFP readout) | **0.531** | 0.709 | 0.424 | 0.489 |
+| full / full (GINE, GFP everywhere) | 0.530 | **0.820** | 0.391 | **0.492** |
+
+Reading: baseline edge features in message passing lift F1 by +0.106; adding the 61 GFP
+features at the readout lifts a further +0.059–0.097; pushing GFP into message passing too
+adds nothing to F1 (−0.001) — it only trades recall for precision. The best configuration is
+**base features in message passing + all 81 features at the readout**, F1 0.531 = +0.165 over
+the no-edge-feature baseline at identical capacity. This is the thesis's central claim showing
+up under a leak-free, architecture-controlled protocol: manual feature engineering helps, and
+its value concentrates at the decision layer.
+
 ## 8. Artifact Inventory
 
 | File | Content |
@@ -201,6 +223,7 @@ long-window blocks) differ as intended.
 | `Data/standard_scaler.pkl` | train-fit normalisation parameters |
 | `Data/train_graph.pt`, `val_graph.pt`, `test_graph.pt` | cumulative PyG snapshots |
 | `Data/gfp_variants/{win48,win120,lc10,rich}.npy` + `_cols.json` | GFP variant feature blocks |
+| `Outputs/GIN/<run>/` | per-run `results.json`, `history.csv`, `curves.png`, `best.pt` (§7.1) + `batch_summary.csv` |
 
 ---
 
