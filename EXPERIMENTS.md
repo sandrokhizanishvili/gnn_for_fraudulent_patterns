@@ -136,6 +136,8 @@ passing / which the final classifier sees. "base" = 20 baseline, "base+GFP" = al
 
 *Newest first. Unticked = in progress · ticked = finished and synced.*
 
+- [x] **27 Sep** — optional gradient accumulation removed from `gnn_core.py` again: never used
+      (the GAT batch fitted at 8,192), training loop back to the one every run used
 - [x] **26 Sep** — GAT batch (GAT-1 … GAT-7) trained on Kaggle under the full evaluation
       protocol; results, curves and predictions in `Outputs/GAT/`, table in `Progress_Report.md` §7.2
 - [x] **26 Sep** — GATv2 operator in `gnn_core.py` (+ optional gradient accumulation, default off);

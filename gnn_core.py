@@ -30,9 +30,7 @@ NUM_LAYERS    = 2
 DROPOUT       = 0.3
 HEADS         = 4              # GATv2 / Transformer: 4 heads x 32 = 128
 NUM_NEIGHBORS = [100, 100]     # neighbours sampled per hop, one entry per layer
-BATCH_SIZE    = 8192           # seed edges per optimizer step
-ACCUM_STEPS   = 1              # >1: the 8192 seeds arrive as ACCUM_STEPS smaller sampled micro-batches, one step per 8192
-                               # (same update, smaller subgraph in memory — for GATv2 on Kaggle if it runs out of GPU RAM)
+BATCH_SIZE    = 8192           # seed edges per mini-batch
 EPOCHS        = 20
 LR            = 1e-3
 WEIGHT_DECAY  = 1e-5           # Adam L2 term; every run since the first batch used it, so it is part of the recipe
@@ -234,10 +232,7 @@ def make_loader(graph, shuffle, mp_idx, readout_idx, temporal=False):
     seed_y     = graph.y[seed_mask].float()
     seed_feats = graph.edge_attr[seed_mask][:, readout_idx]
 
-    # the shuffled (train) loader yields micro-batches of BATCH_SIZE // ACCUM_STEPS seeds; val/test predict at full size
-    assert BATCH_SIZE % ACCUM_STEPS == 0, f'BATCH_SIZE {BATCH_SIZE} must be divisible by ACCUM_STEPS {ACCUM_STEPS}'
-    batch_size = BATCH_SIZE // ACCUM_STEPS if shuffle else BATCH_SIZE
-    kwargs = dict(num_neighbors=NUM_NEIGHBORS, batch_size=batch_size, edge_label_index=seed_index,
+    kwargs = dict(num_neighbors=NUM_NEIGHBORS, batch_size=BATCH_SIZE, edge_label_index=seed_index,
                   edge_label=seed_y, shuffle=shuffle)
     if temporal:
         # only edges earlier than the seed are sampled (needs a recent pyg-lib)
@@ -372,32 +367,21 @@ def train_one_run(model, loaders, out_dir):
     '''
     train_loader, train_feats = loaders['train']
     val_loader,   val_feats   = loaders['val']
-    # summed (not mean) loss: micro-batches add up and the gradient is divided by the seed count at
-    # step time -> exactly the mean-loss gradient over the BATCH_SIZE seeds, whatever ACCUM_STEPS is
-    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([POS_WEIGHT], device=device), reduction='sum')
+    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([POS_WEIGHT], device=device))
     optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
-    if ACCUM_STEPS > 1:
-        print(f'gradient accumulation: {ACCUM_STEPS} micro-batches of {BATCH_SIZE // ACCUM_STEPS} seeds per optimizer step')
 
     history = []
     best_val_f1, best_epoch, best_threshold = -1.0, 0, 0.5
     for epoch in range(1, EPOCHS + 1):
         t0 = time.time()
         model.train()
-        optimizer.zero_grad()
-        n_seen = 0
-        for step, batch in enumerate(tqdm(train_loader, desc='train', leave=False), start=1):
+        for batch in tqdm(train_loader, desc='train', leave=False):
+            optimizer.zero_grad()
             logits, y = forward_batch(model, batch, train_feats)
-            criterion(logits, y).backward()
-            n_seen += len(y)
-            if step % ACCUM_STEPS == 0 or step == len(train_loader):
-                for p in model.parameters():
-                    if p.grad is not None:
-                        p.grad.div_(n_seen)
-                optimizer.step()
-                optimizer.zero_grad()
-                n_seen = 0
+            loss = criterion(logits, y)
+            loss.backward()
+            optimizer.step()
 
         # overfitting diagnostics: train and val in eval mode; train F1 reuses the val threshold
         y_train, p_train, _ = predict(model, train_loader, train_feats, 'train')
@@ -487,7 +471,7 @@ def result_row(name, operator, cfg, mp_direction, temporal, best_epoch, threshol
     '''The flat result row shared by results.json and batch_summary.csv.'''
     row = {'run': name, 'operator': operator, 'mp': cfg['mp'], 'readout': cfg['readout'],
            'mp_direction': mp_direction, 'temporal_sampling': temporal, 'seed': SEED,
-           'accum_steps': ACCUM_STEPS, 'best_epoch': best_epoch, 'threshold': threshold,
+           'best_epoch': best_epoch, 'threshold': threshold,
            'params': n_params, 'invariant_params': n_invariant}
     row.update(flatten_metrics(metrics))
     return row

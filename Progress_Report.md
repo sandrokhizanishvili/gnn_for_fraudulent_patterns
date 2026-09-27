@@ -150,8 +150,7 @@ message-passing box differs. The table lists what is fixed and the knobs that ma
   `edge_dim` — `lin_edge` is the only width-dependent tensor.
 - Same two-layer template, residual, dropout; invariant parameters 67,585 (attention vectors
   and biases replace the GIN MLP).
-- Kaggle memory: the batch ran at 8,192 seed edges on a T4 without gradient accumulation
-  (`ACCUM_STEPS = 1`; the option to split each step into two micro-batches stays in `gnn_core.py`).
+- Fits a Kaggle T4 at the full 8,192 seed edges per batch.
 - Invariant parameters 67,585. **Status: 7 runs done → §7.2.**
 
 ### 5.3 PNA — several aggregators at once
@@ -346,8 +345,7 @@ readout: test F1 **0.525** (+0.154 over GIN-1), best recall and Recall@5 %, no o
 
 ### 7.2 GATv2 family (hidden 128, dir=in, seed 42; batch of 26 Sep 2026)
 
-`invariant_params` = **67,585** in every run; batch 8,192 fitted on the Kaggle T4, no gradient
-accumulation (`accum_steps` = 1); training logs in the executed `GAT_fixed_architecture.ipynb`.
+`invariant_params` = **67,585** in every run; training logs in the executed `GAT_fixed_architecture.ipynb`.
 
 #### 7.2.1 GAT-1 · none / base — topology alone, the reference point
 
