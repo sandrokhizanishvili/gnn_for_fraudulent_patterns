@@ -47,5 +47,5 @@ seven feature configurations: which edge features enter message passing (none / 
 81 baseline+GFP) × which the classifier sees (baseline / baseline+GFP / GFP only). Headline
 metric minority-class F1 at a validation-chosen threshold, with PR-AUC and top-5 % recall;
 every metric on train, val and test. Results per family in `Outputs/<FAMILY>/` and in
-[Progress_Report.md](Progress_Report.md) §7.1 (GIN family: best test F1 0.525, baseline
-features in message passing + all 81 features at the readout).
+[Progress_Report.md](Progress_Report.md) §7.1–7.2 (best test F1: GIN 0.525, GATv2 0.500 — both
+with baseline features in message passing + all 81 features at the readout).

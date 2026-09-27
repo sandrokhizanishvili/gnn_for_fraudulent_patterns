@@ -150,11 +150,9 @@ message-passing box differs. The table lists what is fixed and the knobs that ma
   `edge_dim` — `lin_edge` is the only width-dependent tensor.
 - Same two-layer template, residual, dropout; invariant parameters 67,585 (attention vectors
   and biases replace the GIN MLP).
-- Kaggle memory: four heads over `[100, 100]` neighbourhoods may not fit at batch 8,192; then the
-  8,192 seeds arrive as two sampled micro-batches per optimizer step (`ACCUM_STEPS = 2`) — the
-  same update, recorded in `results.json`.
-- Status: notebook `GAT_fixed_architecture.ipynb` ready with the seven configs; **batch not yet
-  run**.
+- Kaggle memory: the batch ran at 8,192 seed edges on a T4 without gradient accumulation
+  (`ACCUM_STEPS = 1`; the option to split each step into two micro-batches stays in `gnn_core.py`).
+- Invariant parameters 67,585. **Status: 7 runs done → §7.2.**
 
 ### 5.3 PNA — several aggregators at once
 
@@ -192,7 +190,7 @@ message-passing box differs. The table lists what is fixed and the knobs that ma
 | **F1** | minority-class F1 at the validation threshold | headline metric, decides rankings |
 | Precision / Recall | at the same threshold | the trade-off behind F1 |
 | PR-AUC | threshold-free ranking quality on the laundering class | robustness check |
-| ROC-AUC | threshold-free, both classes | reported only — 0.94–0.98 for every run, uninformative at 1 : 1,000 |
+| ROC-AUC | threshold-free, both classes | reported only — 0.92–0.99 for every run, uninformative at 1 : 1,000 |
 | Precision@5 % | precision when the top 5 % highest-scored transactions are flagged; ceiling = prevalence / 0.05 (0.015 train, 0.021 val, 0.023 test) | reported only — near its ceiling for every run |
 | Recall@5 % | share of all laundering caught inside that top 5 % | operating point for a fixed alert budget |
 
@@ -346,6 +344,164 @@ readout: test F1 **0.525** (+0.154 over GIN-1), best recall and Recall@5 %, no o
 - Single seed: differences below ~0.02 F1 are ties (the 23 Sep batch of the same configs
   landed within ±0.02).
 
+### 7.2 GATv2 family (hidden 128, dir=in, seed 42; batch of 26 Sep 2026)
+
+`invariant_params` = **67,585** in every run; batch 8,192 fitted on the Kaggle T4, no gradient
+accumulation (`accum_steps` = 1); training logs in the executed `GAT_fixed_architecture.ipynb`.
+
+#### 7.2.1 GAT-1 · none / base — topology alone, the reference point
+
+Best epoch 20 · threshold 0.355 · params 103,041 · `Outputs/GAT/gat_mp-none_readout-base_dir-in/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.341 | 0.353 | 0.330 | 0.303 | 0.974 | 0.0123 | 0.818 |
+| val | 0.434 | 0.604 | 0.339 | 0.354 | 0.974 | 0.0180 | 0.845 |
+| test | **0.392** | 0.513 | 0.317 | 0.330 | 0.973 | 0.0189 | 0.841 |
+
+- No edge features in message passing; the classifier sees the 20 baseline features. The GATv2
+  anchor; 0.021 above GIN-1 (0.371), borderline for a single seed. Still improving at epoch 20.
+
+![GAT-1 — curves](Outputs/GAT/gat_mp-none_readout-base_dir-in/curves.png)
+
+#### 7.2.2 GAT-2 · base / base — edge features inside message passing
+
+Best epoch 13 · threshold 0.477 · params 108,161 · `Outputs/GAT/gat_mp-base_readout-base_dir-in/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.388 | 0.427 | 0.356 | 0.361 | 0.978 | 0.0127 | 0.842 |
+| val | 0.498 | 0.726 | 0.379 | 0.439 | 0.978 | 0.0183 | 0.857 |
+| test | **0.435** | 0.590 | 0.345 | 0.389 | 0.975 | 0.0189 | 0.841 |
+
+- +0.043 F1 over GAT-1 from the same 20 features entering the attention (RQ1) — half the
+  GIN gain (+0.085); precision 0.51 → 0.59.
+
+![GAT-2 — curves](Outputs/GAT/gat_mp-base_readout-base_dir-in/curves.png)
+
+#### 7.2.3 GAT-3 · none / base+GFP — GFP only at the decision layer
+
+Best epoch 20 · threshold 0.480 · params 110,849 · `Outputs/GAT/gat_mp-none_readout-full_dir-in/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.452 | 0.555 | 0.381 | 0.394 | 0.983 | 0.0131 | 0.871 |
+| val | 0.524 | 0.689 | 0.423 | 0.454 | 0.980 | 0.0182 | 0.855 |
+| test | **0.469** | 0.615 | 0.379 | 0.419 | 0.979 | 0.0192 | 0.853 |
+
+- +0.077 F1 over GAT-1 from the 61 GFP features at the readout alone (RQ2) — again more than
+  base features in message passing gave (GAT-2); a tie with GIN-3 (0.471).
+
+![GAT-3 — curves](Outputs/GAT/gat_mp-none_readout-full_dir-in/curves.png)
+
+#### 7.2.4 GAT-4 · base+GFP / base+GFP — GFP everywhere
+
+Best epoch 19 · threshold 0.513 · params 131,585 · `Outputs/GAT/gat_mp-full_readout-full_dir-in/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.507 | 0.597 | 0.441 | 0.477 | 0.988 | 0.0137 | 0.906 |
+| val | 0.570 | 0.765 | 0.454 | 0.512 | 0.981 | 0.0182 | 0.856 |
+| test | **0.488** | 0.611 | 0.406 | 0.458 | 0.978 | 0.0189 | 0.841 |
+
+- A tie with GAT-5 (−0.012). Unlike GIN-4 it does not overfit: validation loss flat after
+  epoch 9, train PR-AUC (0.477) below validation (0.512). The slowest run, ~150 s per epoch.
+
+![GAT-4 — curves](Outputs/GAT/gat_mp-full_readout-full_dir-in/curves.png)
+
+#### 7.2.5 GAT-5 · base / base+GFP — GFP at the decision layer only
+
+Best epoch 20 · threshold 0.603 · params 115,969 · `Outputs/GAT/gat_mp-base_readout-full_dir-in/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.475 | 0.679 | 0.365 | 0.424 | 0.985 | 0.0132 | 0.878 |
+| val | 0.550 | 0.814 | 0.416 | 0.498 | 0.982 | 0.0185 | 0.866 |
+| test | **0.500** | 0.720 | 0.383 | 0.451 | 0.980 | 0.0192 | 0.851 |
+
+- Best of the family: +0.108 over GAT-1 and the highest test precision (0.720); validation
+  loss flat, no overfitting, still improving at epoch 20.
+
+![GAT-5 — curves of the family winner](Outputs/GAT/gat_mp-base_readout-full_dir-in/curves.png)
+
+#### 7.2.6 GAT-6 · base / GFP only — are raw features redundant once message passing has used them?
+
+Best epoch 17 · threshold 0.698 · params 113,409 · `Outputs/GAT/gat_mp-base_readout-gfp_dir-in/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.380 | 0.603 | 0.277 | 0.311 | 0.975 | 0.0125 | 0.828 |
+| val | 0.441 | 0.555 | 0.366 | 0.336 | 0.965 | 0.0169 | 0.795 |
+| test | **0.379** | 0.411 | 0.351 | 0.312 | 0.960 | 0.0177 | 0.786 |
+
+- No: dropping the 20 baseline features from the readout costs 0.121 against GAT-5 and 0.056
+  against GAT-2 — the same pattern as GIN-6, but larger.
+
+![GAT-6 — curves](Outputs/GAT/gat_mp-base_readout-gfp_dir-in/curves.png)
+
+#### 7.2.7 GAT-7 · none / GFP only — GFP alone vs baseline alone
+
+Best epoch 20 · threshold 0.385 · params 108,289 · `Outputs/GAT/gat_mp-none_readout-gfp_dir-in/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.218 | 0.328 | 0.163 | 0.138 | 0.936 | 0.0099 | 0.658 |
+| val | 0.240 | 0.268 | 0.217 | 0.160 | 0.929 | 0.0143 | 0.673 |
+| test | **0.184** | 0.154 | 0.228 | 0.112 | 0.919 | 0.0143 | 0.637 |
+
+- Worst of the family: the 61 GFP features alone at the readout (0.184) are far below the 20
+  baseline features alone (GAT-1, 0.392); test ROC-AUC 0.919, the only run below 0.94. Still
+  improving at epoch 20.
+
+![GAT-7 — curves](Outputs/GAT/gat_mp-none_readout-gfp_dir-in/curves.png)
+
+#### 7.2.8 Best of the GATv2 family
+
+Ranked by test F1; columns as in §7.1.8 (test values at the validation threshold).
+
+| Run | mp / readout | best ep | F1 train | F1 val | F1 test | Precision | Recall | PR-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|---|---|---|
+| GAT-5 | base / base+GFP | 20 | 0.475 | 0.550 | **0.500** | 0.720 | 0.383 | 0.451 | 0.0192 | 0.851 |
+| GAT-4 | base+GFP / base+GFP | 19 | 0.507 | 0.570 | 0.488 | 0.611 | 0.406 | 0.458 | 0.0189 | 0.841 |
+| GAT-3 | none / base+GFP | 20 | 0.452 | 0.524 | 0.469 | 0.615 | 0.379 | 0.419 | 0.0192 | 0.853 |
+| GAT-2 | base / base | 13 | 0.388 | 0.498 | 0.435 | 0.590 | 0.345 | 0.389 | 0.0189 | 0.841 |
+| GAT-1 | none / base | 20 | 0.341 | 0.434 | 0.392 | 0.513 | 0.317 | 0.330 | 0.0189 | 0.841 |
+| GAT-6 | base / GFP only | 17 | 0.380 | 0.441 | 0.379 | 0.411 | 0.351 | 0.312 | 0.0177 | 0.786 |
+| GAT-7 | none / GFP only | 20 | 0.218 | 0.240 | 0.184 | 0.154 | 0.228 | 0.112 | 0.0143 | 0.637 |
+
+**Best of the family: GAT-5** — the same configuration that won for GIN: baseline features in
+message passing, all 81 features at the readout; test F1 **0.500** (+0.108 over GAT-1), highest
+test precision, no overfitting (curves in §7.2.5).
+
+- **RQ1:** edge features inside the attention help, but half as much as for GIN — +0.043 F1
+  (GAT-1 → GAT-2).
+- **RQ2:** GFP at the decision layer is again the larger lever — +0.077 from GFP at the readout
+  alone (GAT-1 → GAT-3); GFP everywhere (GAT-4) is a tie with GAT-5. GFP complements the
+  baseline features, it does not replace them (GAT-6, GAT-7).
+- **No overfitting in any run:** validation loss flat to epoch 20 and train PR-AUC below
+  validation throughout; five runs saved their checkpoint at epoch 19–20, i.e. were still
+  improving when the fixed 20-epoch budget ended.
+- Single seed: differences below ~0.02 F1 are ties.
+
+**GATv2 vs GIN, same configuration** (test F1; the two families differ only in the aggregation
+rule):
+
+| Config | mp / readout | GIN | GATv2 | GATv2 − GIN |
+|---|---|---|---|---|
+| 1 | none / base | 0.371 | 0.392 | +0.021 |
+| 2 | base / base | 0.456 | 0.435 | −0.021 |
+| 3 | none / base+GFP | 0.471 | 0.469 | −0.002 |
+| 4 | base+GFP / base+GFP | 0.512 | 0.488 | −0.024 |
+| 5 | base / base+GFP | **0.525** | **0.500** | −0.025 |
+| 6 | base / GFP only | 0.440 | 0.379 | −0.061 |
+| 7 | none / GFP only | 0.256 | 0.184 | −0.072 |
+
+- Attention does not beat the plain sum: configs 1–5 are ties or small gaps (±0.025), and GATv2
+  falls clearly behind only when the readout loses the baseline features (6, 7).
+- The ranking is almost the same for both operators — configs 5, 4, 3, 2 on top in that order,
+  GFP only at the readout last; only 1 and 6 swap — so the feature findings (RQ1, RQ2) do not
+  depend on the aggregation rule.
+
 ## 8 · Repository map
 
 | File | Content |
@@ -355,10 +511,10 @@ readout: test F1 **0.525** (+0.154 over GIN-1), best recall and Recall@5 %, no o
 | `GFP_experiments.ipynb` | the four GFP parameter variants + rationale |
 | `Data_checks.ipynb` | 61 verification checks over every artifact |
 | `gnn_core.py` | shared code for every operator: fixed model template, `build_model(operator, …)`, loaders, training loop with validation threshold sweep, metrics on all splits, curves, saving, `invariant_params()` |
-| `GIN_fixed_architecture.ipynb` | the Kaggle notebook of the GIN family: config cell (7 runs) + loop over `gnn_core.py`; `GAT_fixed_architecture.ipynb` is the same notebook for GATv2 |
+| `GIN_fixed_architecture.ipynb` | the Kaggle notebook of the GIN family: config cell (7 runs) + loop over `gnn_core.py`; `GAT_fixed_architecture.ipynb` is the same notebook for GATv2 (only the config cell differs) |
 | `run_gfp_wsl.py` | causal batched GFP bridge (Windows snapml lacks GFP → runs in WSL) |
 | `Progress_Report.md` / `EXPERIMENTS.md` | this document (mirror of the Notion documentation page) / experiment tracker (mirror of the Notion experiments page) |
-| `Outputs/GIN/<run>/` | results.json (all splits, all metrics), history.csv, curves.png, best.pt, predictions.csv (the last two not versioned) • batch_summary.csv per batch |
+| `Outputs/<FAMILY>/<run>/` (GIN, GAT) | results.json (all splits, all metrics), history.csv, curves.png, best.pt, predictions.csv (the last two not versioned) • batch_summary.csv per batch |
 
 ---
 

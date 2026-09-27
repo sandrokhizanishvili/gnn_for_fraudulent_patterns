@@ -20,7 +20,8 @@ Mirrored on the Notion experiments page (kept in sync).
 - [x] GIN batch (GIN-1 … GIN-7) trained under the full evaluation protocol — Kaggle, 26 Sep;
       results in `Progress_Report.md` §7.1 (winner GIN-5, test F1 0.525)
 - [ ] PNA notebook + batch (7 runs)
-- [ ] GATv2 notebook + batch (7 runs)
+- [x] GATv2 batch (GAT-1 … GAT-7) trained under the same protocol — Kaggle, 26 Sep;
+      results in `Progress_Report.md` §7.2 (winner GAT-5, test F1 0.500)
 
 ---
 
@@ -50,7 +51,7 @@ dropout 0.3, identical training recipe — so only the aggregation rule differs.
 
 - [x] **GIN / GINE** — sums neighbour messages · `GIN_fixed_architecture.ipynb` · 7 runs
 - [ ] **PNA** — several aggregators at once (mean, max, min, std) · `PNA_fixed_architecture.ipynb` · 7 runs
-- [ ] **GATv2** — attention decides which neighbours matter · `GAT_fixed_architecture.ipynb` · 7 runs
+- [x] **GATv2** — attention decides which neighbours matter · `GAT_fixed_architecture.ipynb` · 7 runs
 - [ ] **Graph Transformer** — attention with edge features over the sampled neighbourhood ·
       `TRANSFORMER_fixed_architecture.ipynb` · 7 runs
 
@@ -91,13 +92,13 @@ passing / which the final classifier sees. "base" = 20 baseline, "base+GFP" = al
 
 ### GATv2 family
 
-- [ ] **GAT-1** · none / base
-- [ ] **GAT-2** · base / base
-- [ ] **GAT-3** · none / base+GFP
-- [ ] **GAT-4** · base+GFP / base+GFP
-- [ ] **GAT-5** · base / base+GFP
-- [ ] **GAT-6** · base / GFP only
-- [ ] **GAT-7** · none / GFP only
+- [x] **GAT-1** · none / base → `Outputs/GAT/gat_mp-none_readout-base_dir-in/`
+- [x] **GAT-2** · base / base → `Outputs/GAT/gat_mp-base_readout-base_dir-in/`
+- [x] **GAT-3** · none / base+GFP → `Outputs/GAT/gat_mp-none_readout-full_dir-in/`
+- [x] **GAT-4** · base+GFP / base+GFP → `Outputs/GAT/gat_mp-full_readout-full_dir-in/`
+- [x] **GAT-5** · base / base+GFP → `Outputs/GAT/gat_mp-base_readout-full_dir-in/`
+- [x] **GAT-6** · base / GFP only → `Outputs/GAT/gat_mp-base_readout-gfp_dir-in/`
+- [x] **GAT-7** · none / GFP only → `Outputs/GAT/gat_mp-none_readout-gfp_dir-in/`
 
 ### Transformer family
 
@@ -135,7 +136,9 @@ passing / which the final classifier sees. "base" = 20 baseline, "base+GFP" = al
 
 *Newest first. Unticked = in progress · ticked = finished and synced.*
 
-- [ ] **26 Sep** — GATv2 operator in `gnn_core.py` (+ optional gradient accumulation, default off);
+- [x] **26 Sep** — GAT batch (GAT-1 … GAT-7) trained on Kaggle under the full evaluation
+      protocol; results, curves and predictions in `Outputs/GAT/`, table in `Progress_Report.md` §7.2
+- [x] **26 Sep** — GATv2 operator in `gnn_core.py` (+ optional gradient accumulation, default off);
       `GAT_fixed_architecture.ipynb` ready with the seven configs, batch not yet run
 - [x] **26 Sep** — GIN batch (GIN-1 … GIN-7) trained on Kaggle under the full evaluation
       protocol; results, curves and predictions in `Outputs/GIN/`, table in `Progress_Report.md` §7.1
