@@ -20,7 +20,7 @@ from sklearn.metrics import (average_precision_score, f1_score, precision_recall
                              precision_score, recall_score, roc_auc_score)
 from torch_geometric.data import Data
 from torch_geometric.loader import LinkNeighborLoader
-from torch_geometric.nn import GATv2Conv, GINConv, GINEConv
+from torch_geometric.nn import GATv2Conv, GINConv, GINEConv, PNAConv
 from torch_geometric.utils import degree
 from tqdm.auto import tqdm
 
@@ -110,9 +110,13 @@ def make_conv(operator, hidden, mp_edge_dim, deg_hist=None):
             return GINEConv(gin_mlp(hidden), train_eps=True, edge_dim=mp_edge_dim)
         return GINConv(gin_mlp(hidden), train_eps=True)
     if operator == 'pna':
-        raise NotImplementedError('pna: PNAConv(hidden, hidden, aggregators, scalers, deg=deg_hist, '
-                                  'edge_dim=mp_edge_dim or None, towers=1) — needs the training-graph '
-                                  'in-degree histogram (in_degree_histogram)')
+        # 4 aggregators x 3 scalers -> post-MLP -> 128; scalers calibrated on the train in-degree histogram
+        assert deg_hist is not None, 'pna needs the training-graph in-degree histogram (in_degree_histogram)'
+        pna_kwargs = dict(aggregators=['mean', 'max', 'min', 'std'],
+                          scalers=['identity', 'amplification', 'attenuation'], deg=deg_hist, towers=1)
+        if mp_edge_dim > 0:
+            return PNAConv(hidden, hidden, edge_dim=mp_edge_dim, **pna_kwargs)
+        return PNAConv(hidden, hidden, **pna_kwargs)
     if operator == 'gat':
         # 4 heads x 32 concatenated -> 128; lin_edge (edge_dim) is the only width-dependent tensor
         if mp_edge_dim > 0:
@@ -202,11 +206,15 @@ def invariant_params(model):
     '''Parameters whose shape does not depend on the edge-feature widths.
 
     67,587 for the GIN family, 67,585 for the GATv2 family (lin_l / lin_r / att / bias count,
-    lin_edge does not). Excluded: the edge projection inside the conv (.lin. / lin_edge /
-    edge_encoder) and the readout's first Linear (classifier.0.). Must be identical across
-    feature configs within a family.
+    lin_edge does not), 427,265 for the PNA family (its message MLP input widens from 2 x 128
+    to 3 x 128 once edge features enter, so its first Linear pre_nns.0.0 is counted with the
+    edge projections; PNAConv's output `lin` shares the GINE tag and is left out — it is
+    constant, so the check is unaffected). Excluded: the edge projection inside the conv
+    (.lin. / lin_edge / edge_encoder / pre_nns.0.0.) and the readout's first Linear
+    (classifier.0.). Must be identical across feature configs within a family; families differ
+    (same 2 layers and width 128, different operator internals).
     '''
-    width_dependent = ('.lin.', 'lin_edge', 'edge_encoder', 'classifier.0.')
+    width_dependent = ('.lin.', 'lin_edge', 'edge_encoder', 'pre_nns.0.0.', 'classifier.0.')
     total = 0
     for name, p in model.named_parameters():
         if not any(tag in name for tag in width_dependent):

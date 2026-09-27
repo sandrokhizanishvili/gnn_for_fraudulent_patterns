@@ -136,6 +136,9 @@ passing / which the final classifier sees. "base" = 20 baseline, "base+GFP" = al
 
 *Newest first. Unticked = in progress · ticked = finished and synced.*
 
+- [ ] **27 Sep** — PNA operator in `gnn_core.py` (`PNAConv`, four aggregators × three scalers,
+      training-graph in-degree histogram); `PNA_fixed_architecture.ipynb` ready with the seven
+      configs, batch not yet run
 - [x] **27 Sep** — optional gradient accumulation removed from `gnn_core.py` again: never used
       (the GAT batch fitted at 8,192), training loop back to the one every run used
 - [x] **26 Sep** — GAT batch (GAT-1 … GAT-7) trained on Kaggle under the full evaluation

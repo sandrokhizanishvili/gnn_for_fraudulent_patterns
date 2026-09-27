@@ -63,13 +63,36 @@ Fixed **a priori for ALL runs** (chosen so the 81-dim feature set is never compr
 | Dropout | 0.3 |
 | Node MLP (GIN family) | Linear → BatchNorm → ReLU → Linear, learnable ε, residual |
 | GATv2 | 4 heads × 32 = 128 |
-| PNA | needs training-graph in-degree histogram; same dims/depth |
+| PNA | PyG `PNAConv`, aggregators mean/max/min/std × scalers identity/amplification/attenuation, towers 1, in-degree histogram of the training graph; same dims/depth |
 | Transformer | PyG `TransformerConv` with edge features, 4 heads × 32 = 128, same 2-layer template (local attention over sampled neighbours — full-graph attention is infeasible at 5M edges) |
 | Readout | concat `[h_src ‖ h_dst ‖ e_seed]` → Linear 128 → ReLU → Dropout → Linear 1 |
 | Sampling | `LinkNeighborLoader`, [100, 100], batch 8,192 seed edges |
 | Loss / optimiser | `BCEWithLogitsLoss(pos_weight=8)` / Adam 1e-3, cosine, 20 epochs |
 | Seed | 42 (seed sweep on the winning runs later; see "Cross-checks" in `EXPERIMENTS.md`) |
-| Invariant params | GIN family **67,587** · GATv2 family **67,585** — must be identical across feature configs within a family; verify every run |
+| Invariant params | GIN family **67,587** · GATv2 family **67,585** · PNA family **427,265** — must be identical across feature configs within a family; verify every run |
+
+**Comparability across operators:** the rule is the same number of layers (2) and the same
+embedding dimension (128) for every operator; the parameter count may differ by operator, because
+each operator's internals differ (PNA's 12 aggregator × scaler views feed a 1,664 → 128 MLP per
+layer). Total parameters over the 7 configs: GIN 103,043–131,843 · GATv2 103,041–131,585 ·
+PNA 561,537–623,105. Within a family only the edge projections and the readout input widen.
+
+**Everything outside the message-passing operator is identical for every operator** — the
+operator is the only box that may differ. Concretely, shared by GIN / GATv2 / PNA / Transformer
+and enforced by `gnn_core.py` (`EdgeClassifier`, `MPLayer`), never re-implemented in a notebook:
+- **Before MP:** node features → `node_proj` Linear 6 → 128 → ReLU; the `mp` knob selects the
+  same edge columns for every operator and hands them to the conv as `edge_attr`. How the conv
+  consumes them (GINE adds, GATv2 attends, PNA concatenates) is part of the operator.
+- **Each of the 2 layers:** the same wrapper `h ← h + Dropout(0.3)(ReLU(conv(h, edges)))`; conv
+  input 128, conv output 128, residual. Only `conv` differs.
+- **After MP:** the same readout on the seed edge, concat `[h_src ‖ h_dst ‖ e_seed]` → Linear 128
+  → ReLU → Dropout 0.3 → Linear 1; the same loader, loss, optimiser, schedule, threshold selection,
+  checkpointing and scoring.
+- **Normalisation:** none in the shared template (no LayerNorm anywhere). The only normalisation
+  is the BatchNorm inside GIN's node MLP, which is part of the GIN operator. Adding a shared
+  normalisation layer would change the fixed architecture and invalidate the finished runs.
+Anything that would make a projection, dropout, readout or normalisation differ between
+operators is a change to the fixed architecture — stop and say so.
 
 **The only things that may change between runs are the knobs:**
 `OPERATOR` (gin | pna | gat | transformer) · `MP_EDGE_FEATS` (none | base | full) ·

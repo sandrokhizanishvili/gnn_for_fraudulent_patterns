@@ -121,14 +121,15 @@ message-passing box differs. The table lists what is fixed and the knobs that ma
 
 | Fixed for every run | Value |
 |---|---|
-| Template | input projection → 2 message-passing layers (residual, dropout) → readout MLP |
+| Template | input projection → 2 message-passing layers (residual, dropout) → readout MLP. Everything outside the message-passing operator is identical for every operator: the same node projection, the same edge columns handed to the conv, the same layer wrapper `h ← h + Dropout(ReLU(conv(h)))`, the same readout, no shared normalisation layer (BatchNorm exists only inside GIN's node MLP); only the conv differs |
 | Width / dropout | hidden **128** · dropout 0.3 — 128 rather than the paper's 64 so the 81 features are never compressed; fixed a priori |
 | Readout | concat `[h_src ‖ h_dst ‖ e_seed]` → Linear 128 → ReLU → Dropout → Linear 1 |
 | Neighbour sampling | `LinkNeighborLoader` · ≤ 100 neighbours per hop · 2 hops · 8,192 seed edges per batch |
 | Loss | `BCEWithLogitsLoss`, pos_weight = 8 |
 | Optimizer | Adam · lr 1e-3 · weight decay 1e-5 · cosine schedule · 20 epochs |
 | Seed | 42 (seed sweep on the winners later) |
-| Invariant parameters | GIN **67,587** · GATv2 **67,585** — identical across feature configs within a family, verified every run; only the edge projections and the readout input widen |
+| Invariant parameters | GIN **67,587** · GATv2 **67,585** · PNA **427,265** — identical across feature configs within a family, verified every run; only the edge projections and the readout input widen |
+| Comparability across operators | Same number of layers (2) and same embedding dimension (128) for every operator; the parameter count may differ by operator. Total parameters over the 7 configs: GIN 103,043–131,843 · GATv2 103,041–131,585 · PNA 561,537–623,105 (PNA's 12 aggregator × scaler views feed a 1,664 → 128 MLP per layer) |
 | Knobs — all that may change | `OPERATOR` gin / pna / gat / transformer · `MP_EDGE_FEATS` none / base / full · `READOUT_EDGE_FEATS` base / full / gfp · `MP_DIRECTION` in / bidirectional · `TEMPORAL_SAMPLING` on / off |
 
 ### 5.1 GIN / GINE — sum aggregation
@@ -160,6 +161,8 @@ message-passing box differs. The table lists what is fixed and the knobs that ma
   al. 2020 [[10]](#references)); more expressive than a single sum for continuous features.
 - Edge features via `edge_dim`; `towers = 1`; same width 128 and depth 2.
 - The degree histogram is computed on the train graph only, never on val/test.
+- Invariant parameters 427,265: PNA's message MLP is larger than the GIN MLP, and its first
+  Linear widens with edge features, so it is counted with the edge projections.
 - **Status: planned, 7 runs.**
 
 ### 5.4 Graph Transformer — attention with edge features
