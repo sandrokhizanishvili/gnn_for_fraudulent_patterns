@@ -7,7 +7,7 @@
 Master thesis: **does manual feature engineering help Graph Neural Networks detect money
 laundering?** We build a leakage-checked pipeline on the IBM AML **HI-Small** dataset, engineer
 transaction and structural (GFP) features, and compare GNN variants (GIN/GINE, PNA, GATv2) under
-a strictly **fixed architecture**, so any performance difference is attributable to the features,
+a strictly **fixed architecture**, so any performance difference is attributable to the features —
 not to model changes.
 
 Code: [GitHub repo](https://github.com/sandrokhizanishvili/gnn_for_fraudulent_patterns/tree/main) ·
@@ -21,7 +21,7 @@ Task list: `EXPERIMENTS.md` / [Notion experiments page](https://app.notion.com/p
 | Transactions | 5,078,345 raw → **5,077,237** after truncation at Sep 10 |
 | Laundering | **4,522** (0.089%) — 1 : 1,120 imbalance |
 | Accounts (nodes) | 515,070 |
-| Time span | 2022-09-01 → 2022-09-10 (the creator confirms later days contain only laundering-pattern completions [[3]](#references); the dropped tail was 59% laundering and would poison the temporal test split) |
+| Time span | 2022-09-01 → 2022-09-10 (creator confirms later days contain only laundering-pattern completions [[3]](#references) — the dropped tail was 59% laundering and would poison the temporal test split) |
 | Currencies | 15, converted to USD with day-specific Yahoo Finance rates [[7]](#references) |
 | Ground truth patterns | 370 annotated laundering attempts across 8 typologies (cycle, fan-in/out, scatter-gather, stack…) |
 
@@ -54,10 +54,6 @@ Everything else the model knows about an account comes from message passing over
 | `Dt_Dst_Log` | receiver dormancy | same for the receiver | receivers are dormant mules: 8.2 h vs 0.4 h |
 | `Src_Bank_Risk`, `Dst_Bank_Risk` | how risky the sender's / receiver's bank is | smoothed laundering rate of the bank (m = 200 towards the train prior). Train rows use only strictly earlier transactions of that bank; val / test rows use the rate frozen from the train window; unseen banks get the prior — no label leaks into its own feature | 30k banks; rates 0 % → 0.68 % among large banks |
 | `PayFmt_*` — 7 one-hot columns | payment channel | one-hot of Payment Format: ACH, Bitcoin, Cash, Cheque, Credit Card, Reinvestment, Wire | ACH 0.75 % = 7× average |
-
-**Dropped by evidence:** `Currency_Mismatch` (zero positives in its 1.4% share), `Is_ACH`
-(duplicate of the one-hot), `Bank_ID_Norm` (meaningless ordinal), round-amount flags (don't occur
-in this data).
 
 **Leakage rule:** every feature and every fitted quantity (bank rates, normalisation, thresholds)
 uses only the past or the training window; GFP causality is handled in §3; test is scored once.
@@ -109,10 +105,6 @@ excluded from loss/metrics but visible to message passing.
 | train | 3,046,342 (train only) | 3,046,342 (all) | Sep 1 00:00 → Sep 6 13:34 | 2,297 (0.075 %) |
 | val | 4,061,789 (train + val) | 1,015,447 (val part) | Sep 6 13:34 → Sep 8 16:09 | 1,082 (0.107 %) |
 | test | 5,077,237 (all) | 1,015,448 (test part) | Sep 8 16:09 → Sep 10 23:59 | 1,143 (0.113 %) |
-
-The split is positional over the time-sorted stream, so a boundary falls inside a minute: the
-last train edge and the first val edge share the timestamp Sep 6 13:34, likewise Sep 8 16:09
-between val and test.
 
 ## 5 · Models — four operators
 
@@ -187,14 +179,14 @@ message-passing box differs. The table lists what is fixed and the knobs that ma
 - **Curves per run:** train/val loss, F1 and PR-AUC per epoch with a dashed line at the saved
   epoch, plus the test precision–recall curve.
 
-| Metric | What it measures | Role |
-|---|---|---|
-| **F1** | minority-class F1 at the validation threshold | headline metric, decides rankings |
-| Precision / Recall | at the same threshold | the trade-off behind F1 |
-| PR-AUC | threshold-free ranking quality on the laundering class | robustness check |
-| ROC-AUC | threshold-free, both classes | reported only — 0.92–0.99 for every run, uninformative at 1 : 1,000 |
-| Precision@5 % | precision when the top 5 % highest-scored transactions are flagged; ceiling = prevalence / 0.05 (0.015 train, 0.021 val, 0.023 test) | reported only — near its ceiling for every run |
-| Recall@5 % | share of all laundering caught inside that top 5 % | operating point for a fixed alert budget |
+| Metric | What it measures |
+|---|---|
+| **F1** | minority-class F1 at the validation threshold |
+| Precision / Recall | at the same threshold |
+| PR-AUC | threshold-free ranking quality on the laundering class |
+| ROC-AUC | threshold-free, both classes |
+| Precision@5 % | precision when the top 5 % highest-scored transactions are flagged; ceiling = prevalence / 0.05 (0.015 train, 0.021 val, 0.023 test) |
+| Recall@5 % | share of all laundering caught inside that top 5 % |
 
 ## 7 · Results — message passing × data variants
 
@@ -204,7 +196,7 @@ chosen on validation, best-val-F1 checkpoint, test scored once; thresholded metr
 splits use that threshold. Recall@5 % = share of laundering inside the top-5 % highest-scored
 edges. Artifacts in `Outputs/<FAMILY>/<run>/`.
 
-### 7.1 GIN family (hidden 128, dir=in, seed 42; batch of 26 Sep 2026)
+### 7.1 GIN family (hidden 128, dir=in, seed 42)
 
 `invariant_params` = **67,587** in every run; training logs in the executed
 `GIN_fixed_architecture.ipynb`.
@@ -346,7 +338,7 @@ readout: test F1 **0.525** (+0.154 over GIN-1), best recall and Recall@5 %, no o
 - Single seed: differences below ~0.02 F1 are ties (the 23 Sep batch of the same configs
   landed within ±0.02).
 
-### 7.2 GATv2 family (hidden 128, dir=in, seed 42; batch of 26 Sep 2026)
+### 7.2 GATv2 family (hidden 128, dir=in, seed 42)
 
 `invariant_params` = **67,585** in every run; training logs in the executed `GAT_fixed_architecture.ipynb`.
 
@@ -363,7 +355,7 @@ Best epoch 20 · threshold 0.355 · params 103,041 · `Outputs/GAT/gat_mp-none_r
 - No edge features in message passing; the classifier sees the 20 baseline features. The GATv2
   anchor; 0.021 above GIN-1 (0.371), borderline for a single seed. Still improving at epoch 20.
 
-![GAT-1 — curves](Outputs/GAT/gat_mp-none_readout-base_dir-in/curves.png)
+![GAT-1 — loss, F1, PR-AUC per epoch (dashed = saved checkpoint), test PR curve](Outputs/GAT/gat_mp-none_readout-base_dir-in/curves.png)
 
 #### 7.2.2 GAT-2 · base / base — edge features inside message passing
 
@@ -431,9 +423,9 @@ Best epoch 17 · threshold 0.698 · params 113,409 · `Outputs/GAT/gat_mp-base_r
 
 | Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
 |---|---|---|---|---|---|---|---|
-| train | 0.380 | 0.603 | 0.277 | 0.311 | 0.975 | 0.0125 | 0.828 |
+| train | 0.379 | 0.603 | 0.277 | 0.311 | 0.975 | 0.0125 | 0.828 |
 | val | 0.441 | 0.555 | 0.366 | 0.336 | 0.965 | 0.0169 | 0.795 |
-| test | **0.379** | 0.411 | 0.351 | 0.312 | 0.960 | 0.0177 | 0.786 |
+| test | **0.379** | 0.411 | 0.351 | 0.312 | 0.960 | 0.0177 | 0.787 |
 
 - No: dropping the 20 baseline features from the readout costs 0.121 against GAT-5 and 0.056
   against GAT-2 — the same pattern as GIN-6, but larger.
@@ -467,7 +459,7 @@ Ranked by test F1; columns as in §7.1.8 (test values at the validation threshol
 | GAT-3 | none / base+GFP | 20 | 0.452 | 0.524 | 0.469 | 0.615 | 0.379 | 0.419 | 0.0192 | 0.853 |
 | GAT-2 | base / base | 13 | 0.388 | 0.498 | 0.435 | 0.590 | 0.345 | 0.389 | 0.0189 | 0.841 |
 | GAT-1 | none / base | 20 | 0.341 | 0.434 | 0.392 | 0.513 | 0.317 | 0.330 | 0.0189 | 0.841 |
-| GAT-6 | base / GFP only | 17 | 0.380 | 0.441 | 0.379 | 0.411 | 0.351 | 0.312 | 0.0177 | 0.786 |
+| GAT-6 | base / GFP only | 17 | 0.379 | 0.441 | 0.379 | 0.411 | 0.351 | 0.312 | 0.0177 | 0.787 |
 | GAT-7 | none / GFP only | 20 | 0.218 | 0.240 | 0.184 | 0.154 | 0.228 | 0.112 | 0.0143 | 0.637 |
 
 **Best of the family: GAT-5** — the same configuration that won for GIN: baseline features in
@@ -514,7 +506,7 @@ rule):
 | `gnn_core.py` | shared code for every operator: fixed model template, `build_model(operator, …)`, loaders, training loop with validation threshold sweep, metrics on all splits, curves, saving, `invariant_params()` |
 | `GIN_fixed_architecture.ipynb` | the Kaggle notebook of the GIN family: config cell (7 runs) + loop over `gnn_core.py`; `GAT_fixed_architecture.ipynb` is the same notebook for GATv2 (only the config cell differs) |
 | `run_gfp_wsl.py` | causal batched GFP bridge (Windows snapml lacks GFP → runs in WSL) |
-| `Progress_Report.md` / `EXPERIMENTS.md` | this document (mirror of the Notion documentation page) / experiment tracker (mirror of the Notion experiments page) |
+| `Progress_Report.md` / `EXPERIMENTS.md` | markdown mirrors of this page (with the reference list) and of the experiments page — Notion is the main copy |
 | `Outputs/<FAMILY>/<run>/` (GIN, GAT) | results.json (all splits, all metrics), history.csv, curves.png, best.pt, predictions.csv (the last two not versioned) • batch_summary.csv per batch |
 
 ---
