@@ -17,6 +17,7 @@ Full write-up of the work so far: **[Progress_Report.md](Progress_Report.md)**.
 | `GIN_fixed_architecture.ipynb` | Kaggle (GPU) | GIN edge classifier with a **fixed architecture**; knobs select which edge features enter message passing / the classifier, incoming-only vs bidirectional aggregation, and optional temporal sampling |
 | `GAT_fixed_architecture.ipynb` | Kaggle (GPU) | Same notebook for the GATv2 operator (4 heads × 32 = 128, edge features via `edge_dim`); only the config cell differs — everything shared is imported from `gnn_core.py` |
 | `PNA_fixed_architecture.ipynb` | Kaggle (GPU) | Same notebook for the PNA operator (mean / max / min / std aggregators × degree scalers calibrated on the training-graph in-degree histogram, edge features via `edge_dim`); only the config cell differs |
+| `TRANSFORMER_fixed_architecture.ipynb` | Kaggle (GPU) | Same notebook for the graph transformer operator (PyG `TransformerConv`, 4 heads × 32 = 128, attention with edge features via `edge_dim` over the sampled neighbourhood — local, not full-graph); only the config cell differs |
 
 `gnn_core.py` — everything shared by the operator notebooks: the fixed model template,
 `build_model(operator, …)`, loaders, the training loop with validation threshold sweep, metrics on
@@ -43,7 +44,7 @@ Requires a WSL venv: `python3 -m venv ~/gfp_env && ~/gfp_env/bin/pip install 'nu
 ## Model comparison
 
 One fixed architecture (2 message-passing layers, hidden 128, dropout 0.3, same readout and
-training recipe) trained per operator (GIN/GINE, PNA, GATv2, later a graph transformer) over
+training recipe) trained per operator (GIN/GINE, PNA, GATv2, graph transformer) over
 seven feature configurations: which edge features enter message passing (none / 20 baseline /
 81 baseline+GFP) × which the classifier sees (baseline / baseline+GFP / GFP only). Headline
 metric minority-class F1 at a validation-chosen threshold, with PR-AUC and top-5 % recall;

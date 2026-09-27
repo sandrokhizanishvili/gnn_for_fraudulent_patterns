@@ -22,6 +22,7 @@ Mirrored on the Notion experiments page (kept in sync).
 - [ ] PNA notebook + batch (7 runs)
 - [x] GATv2 batch (GAT-1 … GAT-7) trained under the same protocol — Kaggle, 26 Sep;
       results in `Progress_Report.md` §7.2 (winner GAT-5, test F1 0.500)
+- [ ] Transformer notebook + batch (7 runs)
 
 ---
 
@@ -105,8 +106,8 @@ passing / which the final classifier sees. "base" = 20 baseline, "base+GFP" = al
 - [ ] **TR-1** · none / base
 - [ ] **TR-2** · base / base
 - [ ] **TR-3** · none / base+GFP
-- [ ] **TR-4** · base / base+GFP
-- [ ] **TR-5** · base+GFP / base+GFP
+- [ ] **TR-4** · base+GFP / base+GFP
+- [ ] **TR-5** · base / base+GFP
 - [ ] **TR-6** · base / GFP only
 - [ ] **TR-7** · none / GFP only
 
@@ -136,6 +137,9 @@ passing / which the final classifier sees. "base" = 20 baseline, "base+GFP" = al
 
 *Newest first. Unticked = in progress · ticked = finished and synced.*
 
+- [ ] **27 Sep** — Graph Transformer operator in `gnn_core.py` (`TransformerConv`, 4 heads × 32,
+      edge features via `edge_dim`); `TRANSFORMER_fixed_architecture.ipynb` ready with the seven
+      configs, batch not yet run
 - [ ] **27 Sep** — PNA operator in `gnn_core.py` (`PNAConv`, four aggregators × three scalers,
       training-graph in-degree histogram); `PNA_fixed_architecture.ipynb` ready with the seven
       configs, batch not yet run

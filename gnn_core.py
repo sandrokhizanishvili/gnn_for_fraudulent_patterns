@@ -20,7 +20,7 @@ from sklearn.metrics import (average_precision_score, f1_score, precision_recall
                              precision_score, recall_score, roc_auc_score)
 from torch_geometric.data import Data
 from torch_geometric.loader import LinkNeighborLoader
-from torch_geometric.nn import GATv2Conv, GINConv, GINEConv, PNAConv
+from torch_geometric.nn import GATv2Conv, GINConv, GINEConv, PNAConv, TransformerConv
 from torch_geometric.utils import degree
 from tqdm.auto import tqdm
 
@@ -104,6 +104,7 @@ def make_conv(operator, hidden, mp_edge_dim, deg_hist=None):
     '''One graph convolution for the operator; the only place operators differ.
 
     mp_edge_dim = 0 -> edge features stay out of message passing.
+    transformer: root_weight (the node's own state through lin_skip) is part of the standard operator.
     '''
     if operator == 'gin':
         if mp_edge_dim > 0:
@@ -127,8 +128,13 @@ def make_conv(operator, hidden, mp_edge_dim, deg_hist=None):
         return GATv2Conv(hidden, hidden // HEADS, heads=HEADS,
                          add_self_loops=True, fill_value='mean', bias=True)
     if operator == 'transformer':
-        raise NotImplementedError('transformer: TransformerConv(hidden, hidden // HEADS, heads=HEADS, '
-                                  'edge_dim=mp_edge_dim or None)')
+        # 4 heads x 32 concatenated -> 128; lin_edge (edge_dim) is the only width-dependent tensor.
+        # beta, dropout and root_weight are PyG's defaults, written out to be visible.
+        if mp_edge_dim > 0:
+            return TransformerConv(hidden, hidden // HEADS, heads=HEADS, concat=True,
+                                   edge_dim=mp_edge_dim, beta=False, dropout=0.0, root_weight=True)
+        return TransformerConv(hidden, hidden // HEADS, heads=HEADS, concat=True,
+                               beta=False, dropout=0.0, root_weight=True)
     raise ValueError(f'unknown operator {operator!r}; choose from {OPERATORS}')
 
 
@@ -213,10 +219,11 @@ def invariant_params(model):
     lin_edge does not), 427,265 for the PNA family (its message MLP input widens from 2 x 128
     to 3 x 128 once edge features enter, so its first Linear pre_nns.0.0 is counted with the
     edge projections; PNAConv's output `lin` shares the GINE tag and is left out — it is
-    constant, so the check is unaffected). Excluded: the edge projection inside the conv
-    (.lin. / lin_edge / edge_encoder / pre_nns.0.0.) and the readout's first Linear
-    (classifier.0.). Must be identical across feature configs within a family; families differ
-    (same 2 layers and width 128, different operator internals).
+    constant, so the check is unaffected), 133,121 for the Transformer family (lin_key /
+    lin_query / lin_value / lin_skip count, lin_edge does not). Excluded: the edge projection
+    inside the conv (.lin. / lin_edge / edge_encoder / pre_nns.0.0.) and the readout's first
+    Linear (classifier.0.). Must be identical across feature configs within a family; families
+    differ (same 2 layers and width 128, different operator internals).
     '''
     width_dependent = ('.lin.', 'lin_edge', 'edge_encoder', 'pre_nns.0.0.', 'classifier.0.')
     total = 0

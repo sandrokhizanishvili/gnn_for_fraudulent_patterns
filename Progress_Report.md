@@ -120,8 +120,8 @@ message-passing box differs. The table lists what is fixed and the knobs that ma
 | Loss | `BCEWithLogitsLoss`, pos_weight = 8 |
 | Optimizer | Adam · lr 1e-3 · weight decay 1e-5 · cosine schedule · 20 epochs |
 | Seed | 42 (seed sweep on the winners later) |
-| Invariant parameters | GIN **67,587** · GATv2 **67,585** · PNA **427,265** — identical across feature configs within a family, verified every run; only the edge projections and the readout input widen |
-| Comparability across operators | Same number of layers (2) and same embedding dimension (128) for every operator; the parameter count may differ by operator. Total parameters over the 7 configs: GIN 103,043–131,843 · GATv2 103,041–131,585 · PNA 561,537–623,105 (PNA's 12 aggregator × scaler views feed a 1,664 → 128 MLP per layer) |
+| Invariant parameters | GIN **67,587** · GATv2 **67,585** · PNA **427,265** · Transformer **133,121** — identical across feature configs within a family, verified every run; only the edge projections and the readout input widen |
+| Comparability across operators | Same number of layers (2) and same embedding dimension (128) for every operator; the parameter count may differ by operator. Total parameters over the 7 configs: GIN 103,043–131,843 · GATv2 103,041–131,585 · PNA 561,537–623,105 · Transformer 168,577–197,121 (PNA's 12 aggregator × scaler views feed a 1,664 → 128 MLP per layer; the Transformer has four 128 × 128 projections per layer where GATv2 has two) |
 | Knobs — all that may change | `OPERATOR` gin / pna / gat / transformer · `MP_EDGE_FEATS` none / base / full · `READOUT_EDGE_FEATS` base / full / gfp · `MP_DIRECTION` in / bidirectional · `TEMPORAL_SAMPLING` on / off |
 
 ### 5.1 GIN / GINE — sum aggregation
@@ -159,13 +159,19 @@ message-passing box differs. The table lists what is fixed and the knobs that ma
 
 ### 5.4 Graph Transformer — attention with edge features
 
-- Rule: PyG `TransformerConv` (Shi et al. 2021 [[11]](#references)) — multi-head dot-product
-  attention between a node and its sampled neighbours, with edge features added to keys and
-  values.
-- 4 heads × 32 = 128, mirroring GATv2 so the two attention operators differ only in the
-  attention mechanism.
+- Rule: PyG `TransformerConv` (Shi et al. 2021 [[11]](#references)) — each head scores a
+  neighbour by the dot product of the node's query and the neighbour's key, then sums the
+  neighbours' values with those weights.
+- 4 heads × 32 = 128, concatenated, mirroring GATv2 so the two attention operators differ only
+  in the attention mechanism.
+- Edge features via `edge_dim`: `lin_edge` projects them and adds them to keys and values — the
+  only width-dependent tensor.
+- `root_weight` (the node's own state through `lin_skip`) is part of the standard operator and
+  stays on; the shared residual and dropout wrap it as for every operator.
 - Local attention over the sampled `[100, 100]` neighbourhood, not a full-graph transformer
   (infeasible at 5M edges); stated as a limitation.
+- Invariant parameters 133,121: four 128 × 128 projections per layer (query, key, value, skip)
+  where GATv2 has two.
 - **Status: planned, 7 runs.**
 
 ## 6 · Evaluation protocol
@@ -505,6 +511,7 @@ rule):
 | `Data_checks.ipynb` | 61 verification checks over every artifact |
 | `gnn_core.py` | shared code for every operator: fixed model template, `build_model(operator, …)`, loaders, training loop with validation threshold sweep, metrics on all splits, curves, saving, `invariant_params()` |
 | `GIN_fixed_architecture.ipynb` | the Kaggle notebook of the GIN family: config cell (7 runs) + loop over `gnn_core.py`; `GAT_fixed_architecture.ipynb` is the same notebook for GATv2 (only the config cell differs) |
+| `PNA_fixed_architecture.ipynb` / `TRANSFORMER_fixed_architecture.ipynb` | the same notebook for PNA and for the graph transformer (only the config cell differs); batches not yet run |
 | `run_gfp_wsl.py` | causal batched GFP bridge (Windows snapml lacks GFP → runs in WSL) |
 | `Progress_Report.md` / `EXPERIMENTS.md` | markdown mirrors of this page (with the reference list) and of the experiments page — Notion is the main copy |
 | `Outputs/<FAMILY>/<run>/` (GIN, GAT) | results.json (all splits, all metrics), history.csv, curves.png, best.pt, predictions.csv (the last two not versioned) • batch_summary.csv per batch |

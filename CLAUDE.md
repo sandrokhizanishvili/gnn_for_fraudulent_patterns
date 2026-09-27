@@ -13,7 +13,7 @@ Master thesis, Sapienza (laurea magistrale).
 The thesis answers it through one controlled study — **does manual feature engineering help
 GNNs detect money laundering?** Engineered features (20 baseline transaction features; 61 GFP
 structural features; later, node positional/structural encodings) are added to otherwise
-*identical* models across GNN operators (GIN/GINE, PNA, GATv2, later a graph transformer), so
+*identical* models across GNN operators (GIN/GINE, PNA, GATv2, a graph transformer), so
 any difference is attributable to the features, not the model. The results speak back to the
 top-level question: *which* patterns a GNN catches on its own (topology + message passing),
 *which* it needs help with (pre-computed structure at the readout), and *which* typologies
@@ -69,13 +69,15 @@ Fixed **a priori for ALL runs** (chosen so the 81-dim feature set is never compr
 | Sampling | `LinkNeighborLoader`, [100, 100], batch 8,192 seed edges |
 | Loss / optimiser | `BCEWithLogitsLoss(pos_weight=8)` / Adam 1e-3, cosine, 20 epochs |
 | Seed | 42 (seed sweep on the winning runs later; see "Cross-checks" in `EXPERIMENTS.md`) |
-| Invariant params | GIN family **67,587** · GATv2 family **67,585** · PNA family **427,265** — must be identical across feature configs within a family; verify every run |
+| Invariant params | GIN family **67,587** · GATv2 family **67,585** · PNA family **427,265** · Transformer family **133,121** — must be identical across feature configs within a family; verify every run |
 
 **Comparability across operators:** the rule is the same number of layers (2) and the same
 embedding dimension (128) for every operator; the parameter count may differ by operator, because
 each operator's internals differ (PNA's 12 aggregator × scaler views feed a 1,664 → 128 MLP per
-layer). Total parameters over the 7 configs: GIN 103,043–131,843 · GATv2 103,041–131,585 ·
-PNA 561,537–623,105. Within a family only the edge projections and the readout input widen.
+layer; the Transformer has four 128 × 128 projections per layer — query, key, value, skip — where
+GATv2 has two). Total parameters over the 7 configs: GIN 103,043–131,843 · GATv2 103,041–131,585 ·
+PNA 561,537–623,105 · Transformer 168,577–197,121. Within a family only the edge projections and
+the readout input widen.
 
 **Everything outside the message-passing operator is identical for every operator** — the
 operator is the only box that may differ. Concretely, shared by GIN / GATv2 / PNA / Transformer
@@ -201,8 +203,9 @@ mirror both to their Notion pages. Mark superseded rows `SUPERSEDED`, never dele
 ## 7. Repository conventions
 
 - **One notebook per operator, one shared code file.** `GIN_fixed_architecture.ipynb`,
-  `PNA_fixed_architecture.ipynb`, `GAT_fixed_architecture.ipynb` (later `TRANSFORMER_…`) each
-  run one operator's batch and keep that family's results readable in one place. Everything
+  `PNA_fixed_architecture.ipynb`, `GAT_fixed_architecture.ipynb` and
+  `TRANSFORMER_fixed_architecture.ipynb` each run one operator's batch and keep that family's
+  results readable in one place. Everything
   that must be identical across operators lives in **`gnn_core.py`** and is imported, never
   copied: the model template (layers, readout, dropout), `build_model(operator, …)`, the
   training loop, threshold selection, `score_all_splits()`, `plot_curves()`, `save_run()`,
@@ -212,6 +215,10 @@ mirror both to their Notion pages. Mark superseded rows `SUPERSEDED`, never dele
 - All operator notebooks have the **same section order and the same cells**; only the config
   cell differs. On Kaggle, cell 1 clones/pulls the repo and `sys.path.append`s it so the
   committed `gnn_core.py` is used.
+  Exception: PNA's model-preview cell (cell 9) also passes
+  `core.in_degree_histogram(graphs['train'])`, which `PNAConv` needs; all other notebooks omit
+  it. Why: the other operators ignore the histogram, and `run_experiment()` computes it itself
+  for PNA, so the argument would be dead code there and would mean editing executed notebooks.
 - **Kaggle environment cell — keep verbatim in every operator notebook.** The pinned
   PyTorch / PyG stack below is known to work on Kaggle GPU; do not "simplify", reorder, or
   change versions without my OK (a mismatched torch / torch-scatter build is the usual cause of
