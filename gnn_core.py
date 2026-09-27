@@ -118,10 +118,14 @@ def make_conv(operator, hidden, mp_edge_dim, deg_hist=None):
             return PNAConv(hidden, hidden, edge_dim=mp_edge_dim, **pna_kwargs)
         return PNAConv(hidden, hidden, **pna_kwargs)
     if operator == 'gat':
-        # 4 heads x 32 concatenated -> 128; lin_edge (edge_dim) is the only width-dependent tensor
+        # 4 heads x 32 concatenated -> 128; lin_edge (edge_dim) is the only width-dependent tensor.
+        # add_self_loops: node i also attends to itself; fill_value: its self-loop gets the mean of
+        # i's incoming edge features. Both are PyG's defaults, written out to be visible.
         if mp_edge_dim > 0:
-            return GATv2Conv(hidden, hidden // HEADS, heads=HEADS, edge_dim=mp_edge_dim)
-        return GATv2Conv(hidden, hidden // HEADS, heads=HEADS)
+            return GATv2Conv(hidden, hidden // HEADS, heads=HEADS, edge_dim=mp_edge_dim,
+                             add_self_loops=True, fill_value='mean', bias=True)
+        return GATv2Conv(hidden, hidden // HEADS, heads=HEADS,
+                         add_self_loops=True, fill_value='mean', bias=True)
     if operator == 'transformer':
         raise NotImplementedError('transformer: TransformerConv(hidden, hidden // HEADS, heads=HEADS, '
                                   'edge_dim=mp_edge_dim or None)')
