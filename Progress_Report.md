@@ -155,7 +155,7 @@ message-passing box differs. The table lists what is fixed and the knobs that ma
 - The degree histogram is computed on the train graph only, never on val/test.
 - Invariant parameters 427,265: PNA's message MLP is larger than the GIN MLP, and its first
   Linear widens with edge features, so it is counted with the edge projections.
-- **Status: planned, 7 runs.**
+- **Status: 7 runs done → §7.3.**
 
 ### 5.4 Graph Transformer — attention with edge features
 
@@ -501,6 +501,170 @@ rule):
   GFP only at the readout last; only 1 and 6 swap — so the feature findings (RQ1, RQ2) do not
   depend on the aggregation rule.
 
+### 7.3 PNA family (hidden 128, dir=in, seed 42)
+
+`invariant_params` = **427,265** in every run; training logs in the executed `PNA_fixed_architecture.ipynb`.
+
+#### 7.3.1 PNA-1 · none / base — topology alone, the reference point
+
+Best epoch 12 · threshold 0.490 · params 561,537 · `Outputs/PNA/pna_mp-none_readout-base_dir-in/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.467 | 0.622 | 0.374 | 0.404 | 0.977 | 0.0129 | 0.852 |
+| val | 0.491 | 0.761 | 0.362 | 0.405 | 0.975 | 0.0180 | 0.847 |
+| test | **0.452** | 0.600 | 0.363 | 0.389 | 0.976 | 0.0193 | 0.856 |
+
+- No edge features in message passing; the classifier sees the 20 baseline features. The PNA
+  anchor, already above GIN-1 (0.371) and GAT-1 (0.392).
+
+![PNA-1 — loss, F1, PR-AUC per epoch (dashed = saved checkpoint), test PR curve](Outputs/PNA/pna_mp-none_readout-base_dir-in/curves.png)
+
+#### 7.3.2 PNA-2 · base / base — edge features inside message passing
+
+Best epoch 14 · threshold 0.632 · params 599,681 · `Outputs/PNA/pna_mp-base_readout-base_dir-in/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.585 | 0.779 | 0.468 | 0.547 | 0.989 | 0.0137 | 0.907 |
+| val | 0.651 | 0.844 | 0.530 | 0.605 | 0.985 | 0.0186 | 0.872 |
+| test | **0.614** | 0.776 | 0.507 | 0.578 | 0.985 | 0.0198 | 0.881 |
+
+- +0.162 F1 over PNA-1 from the same 20 features entering message passing (RQ1) — the largest
+  RQ1 gain of the three operators (GIN +0.085, GATv2 +0.043); best test PR-AUC of the family.
+
+![PNA-2 — curves](Outputs/PNA/pna_mp-base_readout-base_dir-in/curves.png)
+
+#### 7.3.3 PNA-3 · none / base+GFP — GFP only at the decision layer
+
+Best epoch 14 · threshold 0.453 · params 569,345 · `Outputs/PNA/pna_mp-none_readout-full_dir-in/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.495 | 0.638 | 0.404 | 0.444 | 0.986 | 0.0134 | 0.886 |
+| val | 0.574 | 0.821 | 0.441 | 0.508 | 0.982 | 0.0184 | 0.864 |
+| test | **0.512** | 0.680 | 0.410 | 0.472 | 0.981 | 0.0195 | 0.865 |
+
+- +0.060 F1 over PNA-1 from the 61 GFP features at the readout alone (RQ2) — for PNA, unlike
+  GIN and GATv2, less than base features in message passing gave (PNA-2).
+
+![PNA-3 — curves](Outputs/PNA/pna_mp-none_readout-full_dir-in/curves.png)
+
+#### 7.3.4 PNA-4 · base+GFP / base+GFP — GFP everywhere
+
+Best epoch 15 · threshold 0.699 · params 623,105 · `Outputs/PNA/pna_mp-full_readout-full_dir-in/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.598 | 0.839 | 0.464 | 0.585 | 0.993 | 0.0144 | 0.956 |
+| val | 0.648 | 0.894 | 0.508 | 0.606 | 0.985 | 0.0185 | 0.870 |
+| test | **0.617** | 0.856 | 0.482 | 0.575 | 0.984 | 0.0200 | 0.888 |
+
+- Highest test F1 and precision of the family, but a tie with PNA-2 and PNA-5 (within 0.006).
+- The only run with mild overfitting: validation loss rises from 0.015 at epoch 15 to 0.019 at
+  epoch 20 while train PR-AUC climbs to 0.62 (val 0.58); the checkpoint at epoch 15 was taken
+  before. Slowest run, ~230 s per epoch.
+
+![PNA-4 — curves](Outputs/PNA/pna_mp-full_readout-full_dir-in/curves.png)
+
+#### 7.3.5 PNA-5 · base / base+GFP — GFP at the decision layer only
+
+Best epoch 15 · threshold 0.711 · params 607,489 · `Outputs/PNA/pna_mp-base_readout-full_dir-in/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.587 | 0.819 | 0.458 | 0.560 | 0.991 | 0.0140 | 0.927 |
+| val | 0.648 | 0.872 | 0.516 | 0.610 | 0.986 | 0.0188 | 0.883 |
+| test | **0.611** | 0.800 | 0.494 | 0.574 | 0.986 | 0.0201 | 0.892 |
+
+- The configuration that won for GIN and GATv2; here a tie with PNA-2 (−0.003): GFP at the
+  readout adds nothing once baseline features are in message passing. Best Recall@5 % (0.892).
+
+![PNA-5 — curves](Outputs/PNA/pna_mp-base_readout-full_dir-in/curves.png)
+
+#### 7.3.6 PNA-6 · base / GFP only — are raw features redundant once message passing has used them?
+
+Best epoch 16 · threshold 0.764 · params 604,929 · `Outputs/PNA/pna_mp-base_readout-gfp_dir-in/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.564 | 0.845 | 0.424 | 0.554 | 0.991 | 0.0140 | 0.929 |
+| val | 0.621 | 0.834 | 0.495 | 0.582 | 0.982 | 0.0183 | 0.858 |
+| test | **0.575** | 0.751 | 0.466 | 0.540 | 0.982 | 0.0195 | 0.868 |
+
+- No: dropping the 20 baseline features from the readout costs 0.036 against PNA-5 and 0.039
+  against PNA-2 — the same pattern as GIN-6 and GAT-6, but smaller.
+
+![PNA-6 — curves](Outputs/PNA/pna_mp-base_readout-gfp_dir-in/curves.png)
+
+#### 7.3.7 PNA-7 · none / GFP only — GFP alone vs baseline alone
+
+Best epoch 14 · threshold 0.562 · params 566,785 · `Outputs/PNA/pna_mp-none_readout-gfp_dir-in/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.340 | 0.644 | 0.231 | 0.282 | 0.969 | 0.0120 | 0.798 |
+| val | 0.406 | 0.521 | 0.333 | 0.325 | 0.963 | 0.0169 | 0.794 |
+| test | **0.356** | 0.353 | 0.360 | 0.290 | 0.959 | 0.0178 | 0.793 |
+
+- Worst of the family: the 61 GFP features alone at the readout (0.356) are well below the 20
+  baseline features alone (PNA-1, 0.452); test precision falls to 0.353 (validation 0.521).
+
+![PNA-7 — curves](Outputs/PNA/pna_mp-none_readout-gfp_dir-in/curves.png)
+
+#### 7.3.8 Best of the PNA family
+
+Ranked by test F1; columns as in §7.1.8 (test values at the validation threshold).
+
+| Run | mp / readout | best ep | F1 train | F1 val | F1 test | Precision | Recall | PR-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|---|---|---|
+| PNA-4 | base+GFP / base+GFP | 15 | 0.598 | 0.648 | **0.617** | 0.856 | 0.482 | 0.575 | 0.0200 | 0.888 |
+| PNA-2 | base / base | 14 | 0.585 | 0.651 | 0.614 | 0.776 | 0.507 | 0.578 | 0.0198 | 0.881 |
+| PNA-5 | base / base+GFP | 15 | 0.587 | 0.648 | 0.611 | 0.800 | 0.494 | 0.574 | 0.0201 | 0.892 |
+| PNA-6 | base / GFP only | 16 | 0.564 | 0.621 | 0.575 | 0.751 | 0.466 | 0.540 | 0.0195 | 0.868 |
+| PNA-3 | none / base+GFP | 14 | 0.495 | 0.574 | 0.512 | 0.680 | 0.410 | 0.472 | 0.0195 | 0.865 |
+| PNA-1 | none / base | 12 | 0.467 | 0.491 | 0.452 | 0.600 | 0.363 | 0.389 | 0.0193 | 0.856 |
+| PNA-7 | none / GFP only | 14 | 0.340 | 0.406 | 0.356 | 0.353 | 0.360 | 0.290 | 0.0178 | 0.793 |
+
+**Best of the family: PNA-4** by test F1 (**0.617**), but PNA-2, PNA-4 and PNA-5 are a three-way
+tie (test 0.611–0.617, validation 0.648–0.651). PNA-2 gets there with the 20 baseline features
+alone, no GFP (curves in §7.3.2, §7.3.4, §7.3.5).
+
+- **RQ1:** edge features inside message passing are the big lever for PNA — +0.162 F1
+  (PNA-1 → PNA-2), about twice the GIN gain and four times the GATv2 gain.
+- **RQ2:** GFP helps when message passing has no edge features (+0.060, PNA-1 → PNA-3) but adds
+  nothing once the baseline features are in message passing (PNA-2 → PNA-5 −0.003, → PNA-4
+  +0.003). This suggests PNA's four aggregators recover from the baseline edge features much of
+  what GFP pre-computes. GFP still complements, it does not replace (PNA-6, PNA-7).
+- **Training:** checkpoints at epochs 12–16, so every run converged inside the 20-epoch budget
+  (unlike GATv2); mild overfitting only in PNA-4. 49–78 min per run, 6.8 h for the batch
+  (GIN 2.7 h, GATv2 3.4 h).
+- Single seed: differences below ~0.02 F1 are ties.
+
+**PNA vs GIN and GATv2, same configuration** (test F1):
+
+| Config | mp / readout | GIN | GATv2 | PNA | PNA − GIN | PNA − GATv2 |
+|---|---|---|---|---|---|---|
+| 1 | none / base | 0.371 | 0.392 | 0.452 | +0.081 | +0.060 |
+| 2 | base / base | 0.456 | 0.435 | 0.614 | +0.158 | +0.179 |
+| 3 | none / base+GFP | 0.471 | 0.469 | 0.512 | +0.041 | +0.043 |
+| 4 | base+GFP / base+GFP | 0.512 | 0.488 | **0.617** | +0.105 | +0.129 |
+| 5 | base / base+GFP | **0.525** | **0.500** | 0.611 | +0.086 | +0.111 |
+| 6 | base / GFP only | 0.440 | 0.379 | 0.575 | +0.135 | +0.196 |
+| 7 | none / GFP only | 0.256 | 0.184 | 0.356 | +0.100 | +0.172 |
+
+- PNA is best in all seven configurations; its best run is +0.092 over GIN-5 and +0.117 over
+  GAT-5, far outside seed noise.
+- **Caveat:** PNA has ~5× the parameters of GIN and GATv2 (562k–623k vs 103k–132k) at the same
+  depth and width, so the gap belongs to the whole operator (four aggregators, degree scalers,
+  larger MLPs), not to the aggregation rule alone. The within-family findings are unaffected.
+- **The feature story depends on the operator:** for GIN and GATv2 GFP at the readout is the
+  larger lever; for PNA the baseline features in message passing are, and GFP becomes redundant
+  once they are there — a more expressive aggregator finds on its own part of the structure that
+  GFP hand-codes.
+- No sign of leakage: same data, splits and loaders as GIN and GATv2, degree histogram from the
+  train graph only, test below validation as in every family.
+
 ## 8 · Repository map
 
 | File | Content |
@@ -511,10 +675,10 @@ rule):
 | `Data_checks.ipynb` | 61 verification checks over every artifact |
 | `gnn_core.py` | shared code for every operator: fixed model template, `build_model(operator, …)`, loaders, training loop with validation threshold sweep, metrics on all splits, curves, saving, `invariant_params()` |
 | `GIN_fixed_architecture.ipynb` | the Kaggle notebook of the GIN family: config cell (7 runs) + loop over `gnn_core.py`; `GAT_fixed_architecture.ipynb` is the same notebook for GATv2 (only the config cell differs) |
-| `PNA_fixed_architecture.ipynb` / `TRANSFORMER_fixed_architecture.ipynb` | the same notebook for PNA and for the graph transformer (only the config cell differs); batches not yet run |
+| `PNA_fixed_architecture.ipynb` / `TRANSFORMER_fixed_architecture.ipynb` | the same notebook for PNA and for the graph transformer (only the config cell differs); PNA results in §7.3 |
 | `run_gfp_wsl.py` | causal batched GFP bridge (Windows snapml lacks GFP → runs in WSL) |
 | `Progress_Report.md` / `EXPERIMENTS.md` | markdown mirrors of this page (with the reference list) and of the experiments page — Notion is the main copy |
-| `Outputs/<FAMILY>/<run>/` (GIN, GAT) | results.json (all splits, all metrics), history.csv, curves.png, best.pt, predictions.csv (the last two not versioned) • batch_summary.csv per batch |
+| `Outputs/<FAMILY>/<run>/` (GIN, GAT, PNA) | results.json (all splits, all metrics), history.csv, curves.png, best.pt, predictions.csv (the last two not versioned) • batch_summary.csv per batch |
 
 ---
 

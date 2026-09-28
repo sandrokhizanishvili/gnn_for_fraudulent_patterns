@@ -19,7 +19,8 @@ Mirrored on the Notion experiments page (kept in sync).
 
 - [x] GIN batch (GIN-1 … GIN-7) trained under the full evaluation protocol — Kaggle, 26 Sep;
       results in `Progress_Report.md` §7.1 (winner GIN-5, test F1 0.525)
-- [ ] PNA notebook + batch (7 runs)
+- [x] PNA batch (PNA-1 … PNA-7) trained under the same protocol — Kaggle, 27 Sep;
+      results in `Progress_Report.md` §7.3 (winner PNA-4, test F1 0.617; tie with PNA-2 and PNA-5)
 - [x] GATv2 batch (GAT-1 … GAT-7) trained under the same protocol — Kaggle, 26 Sep;
       results in `Progress_Report.md` §7.2 (winner GAT-5, test F1 0.500)
 - [ ] Transformer notebook + batch (7 runs)
@@ -51,7 +52,7 @@ All operators share one code file (`gnn_core.py`) and one fixed template — 2 l
 dropout 0.3, identical training recipe — so only the aggregation rule differs.
 
 - [x] **GIN / GINE** — sums neighbour messages · `GIN_fixed_architecture.ipynb` · 7 runs
-- [ ] **PNA** — several aggregators at once (mean, max, min, std) · `PNA_fixed_architecture.ipynb` · 7 runs
+- [x] **PNA** — several aggregators at once (mean, max, min, std) · `PNA_fixed_architecture.ipynb` · 7 runs
 - [x] **GATv2** — attention decides which neighbours matter · `GAT_fixed_architecture.ipynb` · 7 runs
 - [ ] **Graph Transformer** — attention with edge features over the sampled neighbourhood ·
       `TRANSFORMER_fixed_architecture.ipynb` · 7 runs
@@ -83,13 +84,13 @@ passing / which the final classifier sees. "base" = 20 baseline, "base+GFP" = al
 
 ### PNA family
 
-- [ ] **PNA-1** · none / base
-- [ ] **PNA-2** · base / base
-- [ ] **PNA-3** · none / base+GFP
-- [ ] **PNA-4** · base+GFP / base+GFP
-- [ ] **PNA-5** · base / base+GFP
-- [ ] **PNA-6** · base / GFP only
-- [ ] **PNA-7** · none / GFP only
+- [x] **PNA-1** · none / base → `Outputs/PNA/pna_mp-none_readout-base_dir-in/`
+- [x] **PNA-2** · base / base → `Outputs/PNA/pna_mp-base_readout-base_dir-in/`
+- [x] **PNA-3** · none / base+GFP → `Outputs/PNA/pna_mp-none_readout-full_dir-in/`
+- [x] **PNA-4** · base+GFP / base+GFP → `Outputs/PNA/pna_mp-full_readout-full_dir-in/`
+- [x] **PNA-5** · base / base+GFP → `Outputs/PNA/pna_mp-base_readout-full_dir-in/`
+- [x] **PNA-6** · base / GFP only → `Outputs/PNA/pna_mp-base_readout-gfp_dir-in/`
+- [x] **PNA-7** · none / GFP only → `Outputs/PNA/pna_mp-none_readout-gfp_dir-in/`
 
 ### GATv2 family
 
@@ -137,10 +138,12 @@ passing / which the final classifier sees. "base" = 20 baseline, "base+GFP" = al
 
 *Newest first. Unticked = in progress · ticked = finished and synced.*
 
+- [x] **27 Sep** — PNA batch (PNA-1 … PNA-7) trained on Kaggle under the full evaluation
+      protocol; results, curves and predictions in `Outputs/PNA/`, table in `Progress_Report.md` §7.3
 - [ ] **27 Sep** — Graph Transformer operator in `gnn_core.py` (`TransformerConv`, 4 heads × 32,
       edge features via `edge_dim`); `TRANSFORMER_fixed_architecture.ipynb` ready with the seven
       configs, batch not yet run
-- [ ] **27 Sep** — PNA operator in `gnn_core.py` (`PNAConv`, four aggregators × three scalers,
+- [x] **27 Sep** — PNA operator in `gnn_core.py` (`PNAConv`, four aggregators × three scalers,
       training-graph in-degree histogram); `PNA_fixed_architecture.ipynb` ready with the seven
       configs, batch not yet run
 - [x] **27 Sep** — optional gradient accumulation removed from `gnn_core.py` again: never used
