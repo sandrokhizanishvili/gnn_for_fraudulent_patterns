@@ -23,7 +23,8 @@ Mirrored on the Notion experiments page (kept in sync).
       results in `Progress_Report.md` §7.3 (winner PNA-4, test F1 0.617; tie with PNA-2 and PNA-5)
 - [x] GATv2 batch (GAT-1 … GAT-7) trained under the same protocol — Kaggle, 26 Sep;
       results in `Progress_Report.md` §7.2 (winner GAT-5, test F1 0.500)
-- [ ] Transformer notebook + batch (7 runs)
+- [x] Graph Transformer batch (TR-1 … TR-7) trained under the same protocol — Kaggle, 28 Sep;
+      results in `Progress_Report.md` §7.4 (winner TR-4, test F1 0.602; tie with TR-2 and TR-5)
 
 ---
 
@@ -54,7 +55,7 @@ dropout 0.3, identical training recipe — so only the aggregation rule differs.
 - [x] **GIN / GINE** — sums neighbour messages · `GIN_fixed_architecture.ipynb` · 7 runs
 - [x] **PNA** — several aggregators at once (mean, max, min, std) · `PNA_fixed_architecture.ipynb` · 7 runs
 - [x] **GATv2** — attention decides which neighbours matter · `GAT_fixed_architecture.ipynb` · 7 runs
-- [ ] **Graph Transformer** — attention with edge features over the sampled neighbourhood ·
+- [x] **Graph Transformer** — attention with edge features over the sampled neighbourhood ·
       `TRANSFORMER_fixed_architecture.ipynb` · 7 runs
 
 **Two extra questions about message passing itself (optional)**
@@ -104,13 +105,13 @@ passing / which the final classifier sees. "base" = 20 baseline, "base+GFP" = al
 
 ### Transformer family
 
-- [ ] **TR-1** · none / base
-- [ ] **TR-2** · base / base
-- [ ] **TR-3** · none / base+GFP
-- [ ] **TR-4** · base+GFP / base+GFP
-- [ ] **TR-5** · base / base+GFP
-- [ ] **TR-6** · base / GFP only
-- [ ] **TR-7** · none / GFP only
+- [x] **TR-1** · none / base → `Outputs/TRANSFORMER/transformer_mp-none_readout-base_dir-in/`
+- [x] **TR-2** · base / base → `Outputs/TRANSFORMER/transformer_mp-base_readout-base_dir-in/`
+- [x] **TR-3** · none / base+GFP → `Outputs/TRANSFORMER/transformer_mp-none_readout-full_dir-in/`
+- [x] **TR-4** · base+GFP / base+GFP → `Outputs/TRANSFORMER/transformer_mp-full_readout-full_dir-in/`
+- [x] **TR-5** · base / base+GFP → `Outputs/TRANSFORMER/transformer_mp-base_readout-full_dir-in/`
+- [x] **TR-6** · base / GFP only → `Outputs/TRANSFORMER/transformer_mp-base_readout-gfp_dir-in/`
+- [x] **TR-7** · none / GFP only → `Outputs/TRANSFORMER/transformer_mp-none_readout-gfp_dir-in/`
 
 ### Cross-checks (optional)
 
@@ -138,9 +139,12 @@ passing / which the final classifier sees. "base" = 20 baseline, "base+GFP" = al
 
 *Newest first. Unticked = in progress · ticked = finished and synced.*
 
+- [x] **28 Sep** — Graph Transformer batch (TR-1 … TR-7) trained on Kaggle under the full
+      evaluation protocol; results, curves and predictions in `Outputs/TRANSFORMER/`, table in
+      `Progress_Report.md` §7.4
 - [x] **27 Sep** — PNA batch (PNA-1 … PNA-7) trained on Kaggle under the full evaluation
       protocol; results, curves and predictions in `Outputs/PNA/`, table in `Progress_Report.md` §7.3
-- [ ] **27 Sep** — Graph Transformer operator in `gnn_core.py` (`TransformerConv`, 4 heads × 32,
+- [x] **27 Sep** — Graph Transformer operator in `gnn_core.py` (`TransformerConv`, 4 heads × 32,
       edge features via `edge_dim`); `TRANSFORMER_fixed_architecture.ipynb` ready with the seven
       configs, batch not yet run
 - [x] **27 Sep** — PNA operator in `gnn_core.py` (`PNAConv`, four aggregators × three scalers,

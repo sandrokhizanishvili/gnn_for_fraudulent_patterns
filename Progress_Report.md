@@ -172,7 +172,7 @@ message-passing box differs. The table lists what is fixed and the knobs that ma
   (infeasible at 5M edges); stated as a limitation.
 - Invariant parameters 133,121: four 128 × 128 projections per layer (query, key, value, skip)
   where GATv2 has two.
-- **Status: planned, 7 runs.**
+- **Status: 7 runs done → §7.4.**
 
 ## 6 · Evaluation protocol
 
@@ -665,6 +665,177 @@ alone, no GFP (curves in §7.3.2, §7.3.4, §7.3.5).
 - No sign of leakage: same data, splits and loaders as GIN and GATv2, degree histogram from the
   train graph only, test below validation as in every family.
 
+### 7.4 Graph Transformer family (hidden 128, dir=in, seed 42)
+
+`invariant_params` = **133,121** in every run; training logs in the executed `TRANSFORMER_fixed_architecture.ipynb`.
+
+#### 7.4.1 TR-1 · none / base — topology alone, the reference point
+
+Best epoch 18 · threshold 0.265 · params 168,577 · `Outputs/TRANSFORMER/transformer_mp-none_readout-base_dir-in/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.300 | 0.261 | 0.353 | 0.299 | 0.977 | 0.0124 | 0.822 |
+| val | 0.427 | 0.537 | 0.354 | 0.347 | 0.974 | 0.0177 | 0.833 |
+| test | **0.370** | 0.389 | 0.353 | 0.337 | 0.975 | 0.0188 | 0.835 |
+
+- No edge features in message passing; the classifier sees the 20 baseline features. The
+  Transformer anchor, a tie with GIN-1 (0.371) and GAT-1 (0.392), below PNA-1 (0.452).
+
+![TR-1 — loss, F1, PR-AUC per epoch (dashed = saved checkpoint), test PR curve](Outputs/TRANSFORMER/transformer_mp-none_readout-base_dir-in/curves.png)
+
+#### 7.4.2 TR-2 · base / base — edge features inside message passing
+
+Best epoch 18 · threshold 0.578 · params 173,697 · `Outputs/TRANSFORMER/transformer_mp-base_readout-base_dir-in/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.574 | 0.731 | 0.472 | 0.549 | 0.990 | 0.0137 | 0.909 |
+| val | 0.624 | 0.858 | 0.491 | 0.563 | 0.984 | 0.0185 | 0.866 |
+| test | **0.586** | 0.802 | 0.461 | 0.549 | 0.984 | 0.0197 | 0.873 |
+
+- +0.216 F1 over TR-1 from the same 20 features entering message passing (RQ1) — the largest
+  RQ1 gain of the four operators (PNA +0.162, GIN +0.085, GATv2 +0.043); precision 0.39 → 0.80.
+
+![TR-2 — curves](Outputs/TRANSFORMER/transformer_mp-base_readout-base_dir-in/curves.png)
+
+#### 7.4.3 TR-3 · none / base+GFP — GFP only at the decision layer
+
+Best epoch 20 · threshold 0.454 · params 176,385 · `Outputs/TRANSFORMER/transformer_mp-none_readout-full_dir-in/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.437 | 0.517 | 0.379 | 0.380 | 0.983 | 0.0132 | 0.875 |
+| val | 0.511 | 0.650 | 0.421 | 0.441 | 0.980 | 0.0181 | 0.849 |
+| test | **0.448** | 0.535 | 0.386 | 0.411 | 0.979 | 0.0193 | 0.856 |
+
+- +0.078 F1 over TR-1 from the 61 GFP features at the readout alone (RQ2) — as for PNA, far
+  less than base features in message passing gave (TR-2). Still improving at epoch 20.
+
+![TR-3 — curves](Outputs/TRANSFORMER/transformer_mp-none_readout-full_dir-in/curves.png)
+
+#### 7.4.4 TR-4 · base+GFP / base+GFP — GFP everywhere
+
+Best epoch 15 · threshold 0.698 · params 197,121 · `Outputs/TRANSFORMER/transformer_mp-full_readout-full_dir-in/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.597 | 0.814 | 0.471 | 0.587 | 0.993 | 0.0144 | 0.955 |
+| val | 0.644 | 0.879 | 0.508 | 0.588 | 0.981 | 0.0182 | 0.854 |
+| test | **0.602** | 0.788 | 0.487 | 0.574 | 0.983 | 0.0198 | 0.881 |
+
+- Highest test F1, recall, PR-AUC and Recall@5 % of the family, but a tie with TR-5 (−0.004)
+  and TR-2 (−0.017).
+- The only run with mild overfitting: validation loss is lowest at epoch 9 (0.016) and drifts up
+  to 0.018 while train loss keeps falling; train PR-AUC ends above validation (0.60 vs 0.59).
+  Validation F1 stays flat at 0.63–0.64, so the checkpoint at epoch 15 is unaffected. Slowest
+  run, ~150 s per epoch.
+
+![TR-4 — curves](Outputs/TRANSFORMER/transformer_mp-full_readout-full_dir-in/curves.png)
+
+#### 7.4.5 TR-5 · base / base+GFP — GFP at the decision layer only
+
+Best epoch 14 · threshold 0.681 · params 181,505 · `Outputs/TRANSFORMER/transformer_mp-base_readout-full_dir-in/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.569 | 0.813 | 0.438 | 0.538 | 0.990 | 0.0139 | 0.923 |
+| val | 0.629 | 0.893 | 0.485 | 0.577 | 0.984 | 0.0185 | 0.867 |
+| test | **0.598** | 0.832 | 0.466 | 0.553 | 0.983 | 0.0196 | 0.871 |
+
+- The configuration that won for GIN and GATv2; here a tie with TR-2 (+0.012) and TR-4:
+  GFP at the readout adds little once baseline features are in message passing. Highest test
+  precision of the family (0.832); validation loss flat, no overfitting.
+
+![TR-5 — curves](Outputs/TRANSFORMER/transformer_mp-base_readout-full_dir-in/curves.png)
+
+#### 7.4.6 TR-6 · base / GFP only — are raw features redundant once message passing has used them?
+
+Best epoch 20 · threshold 0.619 · params 178,945 · `Outputs/TRANSFORMER/transformer_mp-base_readout-gfp_dir-in/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.532 | 0.721 | 0.421 | 0.500 | 0.987 | 0.0136 | 0.899 |
+| val | 0.577 | 0.722 | 0.481 | 0.516 | 0.976 | 0.0176 | 0.828 |
+| test | **0.534** | 0.633 | 0.462 | 0.508 | 0.976 | 0.0191 | 0.850 |
+
+- No: dropping the 20 baseline features from the readout costs 0.063 against TR-5 and 0.051
+  against TR-2 — the same pattern as the other three families.
+
+![TR-6 — curves](Outputs/TRANSFORMER/transformer_mp-base_readout-gfp_dir-in/curves.png)
+
+#### 7.4.7 TR-7 · none / GFP only — GFP alone vs baseline alone
+
+Best epoch 20 · threshold 0.389 · params 173,825 · `Outputs/TRANSFORMER/transformer_mp-none_readout-gfp_dir-in/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.231 | 0.321 | 0.180 | 0.154 | 0.943 | 0.0104 | 0.688 |
+| val | 0.255 | 0.284 | 0.231 | 0.178 | 0.934 | 0.0146 | 0.683 |
+| test | **0.204** | 0.170 | 0.254 | 0.139 | 0.927 | 0.0148 | 0.659 |
+
+- Worst of the family: the 61 GFP features alone at the readout (0.204) are far below the 20
+  baseline features alone (TR-1, 0.370). Slow start (validation F1 0.07 after epoch 1) and still
+  improving at epoch 20.
+
+![TR-7 — curves](Outputs/TRANSFORMER/transformer_mp-none_readout-gfp_dir-in/curves.png)
+
+#### 7.4.8 Best of the Graph Transformer family
+
+Ranked by test F1; columns as in §7.1.8 (test values at the validation threshold).
+
+| Run | mp / readout | best ep | F1 train | F1 val | F1 test | Precision | Recall | PR-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|---|---|---|
+| TR-4 | base+GFP / base+GFP | 15 | 0.597 | 0.644 | **0.602** | 0.788 | 0.487 | 0.574 | 0.0198 | 0.881 |
+| TR-5 | base / base+GFP | 14 | 0.569 | 0.629 | 0.598 | 0.832 | 0.466 | 0.553 | 0.0196 | 0.871 |
+| TR-2 | base / base | 18 | 0.574 | 0.624 | 0.586 | 0.802 | 0.461 | 0.549 | 0.0197 | 0.873 |
+| TR-6 | base / GFP only | 20 | 0.532 | 0.577 | 0.534 | 0.633 | 0.462 | 0.508 | 0.0191 | 0.850 |
+| TR-3 | none / base+GFP | 20 | 0.437 | 0.511 | 0.448 | 0.535 | 0.386 | 0.411 | 0.0193 | 0.856 |
+| TR-1 | none / base | 18 | 0.300 | 0.427 | 0.370 | 0.389 | 0.353 | 0.337 | 0.0188 | 0.835 |
+| TR-7 | none / GFP only | 20 | 0.231 | 0.255 | 0.204 | 0.170 | 0.254 | 0.139 | 0.0148 | 0.659 |
+
+**Best of the family: TR-4** by test F1 (**0.602**), but TR-2, TR-4 and TR-5 are a three-way tie
+(test 0.586–0.602, validation 0.624–0.644) — the same three configurations as the PNA tie (curves
+in §7.4.2, §7.4.4, §7.4.5).
+
+- **RQ1:** edge features inside message passing are the big lever — +0.216 F1 (TR-1 → TR-2),
+  the largest gain of the four operators.
+- **RQ2:** GFP helps when message passing has no edge features (+0.078, TR-1 → TR-3) but adds
+  little once the baseline features are in message passing (TR-2 → TR-5 +0.012, → TR-4 +0.017,
+  both within seed noise). GFP still complements, it does not replace (TR-6, TR-7).
+- **Training:** checkpoints at epochs 14–20; three runs (TR-3, TR-6, TR-7) saved at epoch 20, i.e.
+  were still improving when the fixed budget ended; mild overfitting only in TR-4. 22–49 min per
+  run, 3.4 h for the batch (GIN 2.7 h, GATv2 3.4 h, PNA 6.8 h).
+- Single seed: differences below ~0.02 F1 are ties.
+
+**Graph Transformer vs the other three operators, same configuration** (test F1):
+
+| Config | mp / readout | GIN | GATv2 | PNA | Transformer | TR − GATv2 | TR − PNA |
+|---|---|---|---|---|---|---|---|
+| 1 | none / base | 0.371 | 0.392 | 0.452 | 0.370 | −0.022 | −0.082 |
+| 2 | base / base | 0.456 | 0.435 | 0.614 | 0.586 | +0.151 | −0.028 |
+| 3 | none / base+GFP | 0.471 | 0.469 | 0.512 | 0.448 | −0.021 | −0.064 |
+| 4 | base+GFP / base+GFP | 0.512 | 0.488 | **0.617** | **0.602** | +0.114 | −0.015 |
+| 5 | base / base+GFP | **0.525** | **0.500** | 0.611 | 0.598 | +0.098 | −0.013 |
+| 6 | base / GFP only | 0.440 | 0.379 | 0.575 | 0.534 | +0.155 | −0.041 |
+| 7 | none / GFP only | 0.256 | 0.184 | 0.356 | 0.204 | +0.020 | −0.152 |
+
+- **The Transformer's gain depends on edge features in message passing.** With them (configs 2,
+  4, 5, 6) it is 0.10–0.16 above GATv2 and ties PNA on the best configurations (4, 5); without
+  them (1, 3, 7) it is no better than GIN or GATv2.
+- Both attention operators get the edge features, but differently: in GATv2 they only change
+  the attention weights, in the Transformer they are also added to each neighbour's message
+  (the value). This suggests that putting the transaction's features into the message, not
+  attention itself, is what helps — PNA, which also puts them into the message, shows the same
+  pattern.
+- **Parameters:** the Transformer (169k–197k) is ~1.6× GIN and GATv2 but under a third of PNA
+  (562k–623k), and still comes within 0.015 of PNA's best run — a tie for a single seed.
+- The feature story matches PNA's: baseline features in message passing are the main lever and
+  GFP at the readout becomes nearly redundant once they are there; for GIN and GATv2 it is the
+  other way round.
+- No sign of leakage: same data, splits and loaders as the other families, test below
+  validation in every run.
+
 ## 8 · Repository map
 
 | File | Content |
@@ -675,10 +846,10 @@ alone, no GFP (curves in §7.3.2, §7.3.4, §7.3.5).
 | `Data_checks.ipynb` | 61 verification checks over every artifact |
 | `gnn_core.py` | shared code for every operator: fixed model template, `build_model(operator, …)`, loaders, training loop with validation threshold sweep, metrics on all splits, curves, saving, `invariant_params()` |
 | `GIN_fixed_architecture.ipynb` | the Kaggle notebook of the GIN family: config cell (7 runs) + loop over `gnn_core.py`; `GAT_fixed_architecture.ipynb` is the same notebook for GATv2 (only the config cell differs) |
-| `PNA_fixed_architecture.ipynb` / `TRANSFORMER_fixed_architecture.ipynb` | the same notebook for PNA and for the graph transformer (only the config cell differs); PNA results in §7.3 |
+| `PNA_fixed_architecture.ipynb` / `TRANSFORMER_fixed_architecture.ipynb` | the same notebook for PNA and for the graph transformer (only the config cell differs); results in §7.3 and §7.4 |
 | `run_gfp_wsl.py` | causal batched GFP bridge (Windows snapml lacks GFP → runs in WSL) |
 | `Progress_Report.md` / `EXPERIMENTS.md` | markdown mirrors of this page (with the reference list) and of the experiments page — Notion is the main copy |
-| `Outputs/<FAMILY>/<run>/` (GIN, GAT, PNA) | results.json (all splits, all metrics), history.csv, curves.png, best.pt, predictions.csv (the last two not versioned) • batch_summary.csv per batch |
+| `Outputs/<FAMILY>/<run>/` (GIN, GAT, PNA, TRANSFORMER) | results.json (all splits, all metrics), history.csv, curves.png, best.pt, predictions.csv (the last two not versioned) • batch_summary.csv per batch |
 
 ---
 
