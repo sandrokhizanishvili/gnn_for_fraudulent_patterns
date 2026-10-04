@@ -98,40 +98,51 @@ uses only the past or the training window; GFP causality is handled in §3; test
 ## 3 · GFP configuration & variants
 
 IBM's Graph Feature Preprocessor turns each transaction's graph neighbourhood into numbers,
-computed causally in batches of 128 (see the pitfalls below). **V0** follows the paper's configuration
-(Altman et al. 2023, Appendix D) with one deliberate change: simple cycles are capped at length 6
-instead of the paper's 10, to keep GFP tractable on 5 M edges. The paper's exact setting is the
-**lc10** variant. V0 feeds every result so far; the four variants are computed
-(`Data/gfp_variants/`) but not yet trained on. "= V0" means unchanged.
+computed causally in batches of 128 (see the pitfalls below). Two configurations exist. **V0** follows
+the paper (Altman et al. 2023, Appendix D) with one deliberate change: simple cycles are capped at
+length 6 instead of the paper's 10, to keep GFP tractable on 5 M edges; it feeds every result so far.
+**tuned** changes the windows, the cycle length and the bins to what HI-Small's own laundering
+patterns ask for (`GFP_experiments.ipynb`); it is computed (`Data/gfp_variants/tuned.npy`) but not
+yet trained on.
 
 What the paper fixes: batch size 128, 6 h window for scatter-gather, 24 h for everything else,
 simple cycles up to length 10, vertex statistics on amount and timestamp. What it leaves open
 (our choice): histogram bins [2, 3, 5] and snapml's default eight statistics (no min / max / median).
 
-| Feature group | What it measures for each transaction | V0 (paper, cycles ≤ 6) | win48 | win120 | lc10 | rich |
-|---|---|---|---|---|---|---|
-| Scatter-gather (3 bins) | gather-then-scatter patterns the transaction belongs to, counted by pattern size [2–3, 3–5, 5+] | window 6 h | 12 h | 24 h | = V0 | = V0 |
-| Temporal cycles (3 bins) | time-ordered cycles the transaction closes, by cycle length [2–3, 3–5, 5+] | window 24 h | 48 h | 120 h | = V0 | = V0 |
-| Simple cycles (3 bins) | length-limited cycles the transaction closes, by cycle length | window 24 h, length ≤ 6 | 48 h | 120 h | length ≤ 10 (= paper) | = V0 |
-| Vertex statistics (52) | for sender and receiver, incoming and outgoing: fan, degree, ratio, and avg / sum / var / skew / kurtosis of the timestamps and amounts (2 × 2 × 13) | window 24 h | 48 h | 120 h | = V0 | + min / max / median → 2 × 2 × 19 = 76 |
-| Fan / degree histograms | number of counterparties (fan) and of transactions (degree) of the accounts, in and out, by bin | off | off | off | off | on, bins [2, 4, 8, 13], 24 h → 16 |
-| Graph memory (`time_window`) | how far back edges stay in snapml's graph; caps every window above it | 24 h | 48 h | 120 h | 24 h | 24 h |
-| Features per transaction | | **61** | 61 | 61 | 61 | **101** |
+| Feature group | What it measures for each transaction | V0 (paper, cycles ≤ 6) | tuned |
+|---|---|---|---|
+| Scatter-gather | gather-then-scatter patterns the transaction completes, counted by number of middle accounts | window 6 h, bins [2–3, 3–5, 5+] | window 12 h, bins [2–3, 4–5, 6–7, 8+] |
+| Temporal cycles | time-ordered cycles the transaction closes, by cycle length | window 24 h, bins [2–3, 3–5, 5+] | window 48 h, bins [2–3, 4–5, 6–7, 8+] |
+| Simple cycles | cycles the transaction closes regardless of time order, up to a maximum length | window 24 h, length ≤ 6, same bins | window 48 h, **length ≤ 12**, same bins |
+| Vertex statistics | for sender and receiver, incoming and outgoing: fan, degree, ratio, and avg / sum / var / skew / kurtosis of the timestamps and amounts (2 × 2 × 13 = 52) | window 24 h | window 48 h |
+| Fan / degree histograms | counts of counterparties / transactions by bin | off | off |
+| Graph memory (`time_window`) | how far back edges stay in snapml's graph; caps every window above it | 24 h | 48 h |
+| Features per transaction | | **61** (9 + 52) | **64** (12 + 52) |
 
-**Why the variants:** HI-Small's 370 laundering attempts are slower than the paper's windows —
-21 % finish within 24 h, 37 % of cycles exceed 6 hops. win48 covers 84 % of hop-to-hop gaps
-(V0: 52 %), win120 covers 90 % of attempt durations, lc10 (the paper's cycle length) covers 49 of
-54 observed cycles, rich
-takes its bins from the data's fan-degree quartiles. Longer windows already correlate more with
-the label (cycle features +0.064 → +0.097). Next step: retrain the best model with each variant,
-nothing else changed.
+**Why tuned — measured on the 370 annotated attempts (`HI-Small_Patterns.txt`):** GFP counts a
+pattern on its closing transaction only if every edge of the pattern is still inside the window, so
+what matters is how long a whole attempt lasts.
+
+| Measurement | Result | V0 sees | tuned sees |
+|---|---|---|---|
+| Attempt duration, all typologies | median 75 h; ≤ 24 h: 21 %, ≤ 48 h: 35 %, ≤ 120 h: 91 % | 21 % of attempts whole | 35 % |
+| Cycle attempts (54) | median 72 h; ≤ 24 h: 9 %, ≤ 48 h: 22 %, ≤ 120 h: 100 % | 9 % of rings | 22 % |
+| Cycle length | 2–12 hops; 37 % longer than 6; 5 longer than 10 | 63 % of ring lengths | 100 % |
+| Scatter-gather attempts (44) | median 89 h; ≤ 6 h: 0 %, ≤ 12 h: 2 %, ≤ 120 h: 100 % | 0 % | 2 % — a limitation |
+| Fan-out / fan-in attempts (48 / 40) | ≤ 24 h: 21 / 15 %, ≤ 48 h: 23 / 22 %, ≤ 120 h: 100 % | 21 / 15 % of fans whole | 23 / 22 % |
+| Fan degree (distinct counterparties) | median 7.5, p75 12, max 16 | bins lump most into "5+" | 4 bins |
+| Hop gap along chains (cycles + random walks) | median 8.5 h; ≤ 24 h: 83 %, ≤ 48 h: 96 % | 83 % of hops | 96 % |
+
+120 h would cover every annotated ring, fan and scatter-gather; it was not computed (cost, and
+noise from coincidental long patterns) and is the follow-up if tuned helps. Next step: retrain
+config 5 of GIN and PNA with tuned, nothing else changed.
 
 **Two snapml pitfalls, found by our checks and fixed:**
 
 - snapml drops edges older than the global `time_window` from its internal graph, so a
   per-pattern window longer than it has no effect (verified: with `time_window` left at 24 h,
-  the 48 h cycle features came out identical to the 24 h ones). The long-window variants
-  therefore raise `time_window` to their largest pattern window.
+  the 48 h cycle features came out identical to the 24 h ones). tuned therefore raises
+  `time_window` to 48 h together with the pattern windows.
 - `fit_transform` on the whole dataset at once leaks future information: an account's first
   transaction saw out-degrees up to 176,127 (its whole future; `fit` and `transform` also each
   insert the batch). Fixed by streaming the time-sorted edges through `transform` in batches of
@@ -920,8 +931,8 @@ configurations as the PNA tie (curves in §7.4.2, §7.4.4, §7.4.5).
 Does a random-walk positional encoding (RWPE, §2) help when everything else is held fixed?
 Each run repeats one finished configuration with `NODE_ENC = rwpe16`; only `node_proj` widens
 to (6 + 16) → 128 (+2,048 parameters), `invariant_params` stays at the family value.
-Notebook `RWPE_fixed_architecture.ipynb`, one operator per Kaggle session; outputs in
-`Outputs/<FAMILY>/<run>_enc-rwpe16/`.
+Notebook `RWPE_fixed_architecture.ipynb`, all eight runs in one Kaggle session so one executed
+notebook holds every training log; outputs in `Outputs/RWPE/<FAMILY>/<run>_enc-rwpe16/` (separate from the operator batches in `Outputs/<FAMILY>/`).
 
 | Run | Repeats | Compare with (validation F1) | Status |
 |---|---|---|---|
@@ -956,10 +967,11 @@ Notebook `RWPE_fixed_architecture.ipynb`, one operator per Kaggle session; outpu
 | `GIN_fixed_architecture.ipynb` | the Kaggle notebook of the GIN family: config cell (7 runs) + loop over `gnn_core.py`; `GAT_fixed_architecture.ipynb` is the same notebook for GATv2 (only the config cell differs) |
 | `PNA_fixed_architecture.ipynb` / `TRANSFORMER_fixed_architecture.ipynb` | the same notebook for PNA and for the graph transformer (only the config cell differs); results in §7.3 and §7.4 |
 | `RWPE_encoding.ipynb` / `rwpe_compute.py` | RWPE node encoding per snapshot (toy sanity test against PyG `AddRandomWalkPE`, edge-list check against the graph files, self-loop tables, per-step time / RAM / fill-in log, checks, diagnostics, value scale); the script does the exact scipy computation, CPU only, locally or on Kaggle → `Data/rwpe/rwpe_k{8,16}_{train,val,test}.pt` |
-| `RWPE_fixed_architecture.ipynb` | the same Kaggle notebook for the node-encoding runs of §7.5: config entries carry `operator` and `node_enc` (one operator per session), RWPE files from the Kaggle dataset `hi-small-rwpe`; summary `batch_summary_rwpe.csv` |
+| `RWPE_fixed_architecture.ipynb` | the same Kaggle notebook for the node-encoding runs of §7.5: config entries carry `operator` and `node_enc` (all eight runs in one session), RWPE files from the Kaggle dataset `hi-small-rwpe`; summary `batch_summary_rwpe.csv` per family |
 | `run_gfp_wsl.py` | causal batched GFP bridge (Windows snapml lacks GFP → runs in WSL) |
 | `Progress_Report.md` / `EXPERIMENTS.md` | markdown mirrors of this page (with the reference list) and of the experiments page — Notion is the main copy |
-| `Outputs/<FAMILY>/<run>/` (GIN, GAT, PNA, TRANSFORMER) | results.json (all splits, all metrics), history.csv, curves.png, best.pt, predictions.csv (the last two not versioned) • batch_summary.csv per batch, batch_summary_rwpe.csv for the RWPE runs |
+| `Outputs/<FAMILY>/<run>/` (GIN, GAT, PNA, TRANSFORMER) | results.json (all splits, all metrics), history.csv, curves.png, best.pt, predictions.csv (the last two not versioned) • batch_summary.csv per batch |
+| `Outputs/RWPE/<FAMILY>/<run>/` | the same files for the node-encoding runs (§7.5) • batch_summary_rwpe.csv per family |
 | `Data/rwpe/` (not versioned) | `rwpe_k{8,16}_{train,val,test}.pt` (float32 [515,070, k]) + per-step logs; uploaded to Kaggle as the dataset `hi-small-rwpe` |
 
 ---

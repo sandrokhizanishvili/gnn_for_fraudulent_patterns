@@ -41,9 +41,10 @@ laundering). Each transaction is an edge, each account a node.
       the transaction (cycles, fan-in/out, scatter-gather, degree statistics), IBM's Graph Feature
       Preprocessor with the paper's windows; simple cycles capped at length 6 (paper: 10)
 - [x] **Node features** (6 per account) — account entity type
-- [ ] **GFP with data-tuned windows** — four alternative settings (longer windows, longer cycles
-      — lc10 is the paper's exact cycle length —, extra statistics) are computed; retrain the best
-      model with each to see if they beat V0
+- [ ] **GFP tuned to the data** (64 per transaction) — one alternative sheet, `tuned`: 48 h windows
+      (scatter-gather 12 h), simple cycles up to 12 hops, four pattern bins [2, 4, 6, 8]; chosen from
+      the durations and sizes of HI-Small's 370 annotated attempts (`GFP_experiments.ipynb`,
+      `Progress_Report.md` §3). Computed; next: retrain config 5 of GIN and PNA with it
 - [ ] **RWPE node encoding** (16 per account, k = 16 first) — directed random-walk return
       probabilities (walks follow the money: non-zero = the account sits on a directed money
       cycle of length ≤ 16); one vector per snapshot from
@@ -124,20 +125,20 @@ passing / which the final classifier sees. "base" = 20 baseline, "base+GFP" = al
 - [x] **TR-6** · base / GFP only → `Outputs/TRANSFORMER/transformer_mp-base_readout-gfp_dir-in/`
 - [x] **TR-7** · none / GFP only → `Outputs/TRANSFORMER/transformer_mp-none_readout-gfp_dir-in/`
 
-### RWPE runs — node encoding (`RWPE_fixed_architecture.ipynb`, one operator per Kaggle session)
+### RWPE runs — node encoding (`RWPE_fixed_architecture.ipynb`, all eight in one Kaggle session)
 
 *Config 5 (base / base+GFP) and config 4 (base+GFP / base+GFP) of each family with the k = 16
 RWPE node encoding (`NODE_ENC = rwpe16`); each compared with the family's own config 5 / 4 above
-on validation F1. Summary file: `Outputs/<FAMILY>/batch_summary_rwpe.csv`.*
+on validation F1. Summary file: `Outputs/RWPE/<FAMILY>/batch_summary_rwpe.csv`; the operator batches stay in `Outputs/<FAMILY>/`.*
 
-- [ ] **GIN-5 + RWPE** · base / base+GFP · rwpe16 → `Outputs/GIN/gin_mp-base_readout-full_dir-in_enc-rwpe16/`
-- [ ] **GIN-4 + RWPE** · base+GFP / base+GFP · rwpe16 → `Outputs/GIN/gin_mp-full_readout-full_dir-in_enc-rwpe16/`
-- [ ] **GAT-5 + RWPE** · base / base+GFP · rwpe16 → `Outputs/GAT/gat_mp-base_readout-full_dir-in_enc-rwpe16/`
-- [ ] **GAT-4 + RWPE** · base+GFP / base+GFP · rwpe16 → `Outputs/GAT/gat_mp-full_readout-full_dir-in_enc-rwpe16/`
-- [ ] **PNA-5 + RWPE** · base / base+GFP · rwpe16 → `Outputs/PNA/pna_mp-base_readout-full_dir-in_enc-rwpe16/`
-- [ ] **PNA-4 + RWPE** · base+GFP / base+GFP · rwpe16 → `Outputs/PNA/pna_mp-full_readout-full_dir-in_enc-rwpe16/`
-- [ ] **TR-5 + RWPE** · base / base+GFP · rwpe16 → `Outputs/TRANSFORMER/transformer_mp-base_readout-full_dir-in_enc-rwpe16/`
-- [ ] **TR-4 + RWPE** · base+GFP / base+GFP · rwpe16 → `Outputs/TRANSFORMER/transformer_mp-full_readout-full_dir-in_enc-rwpe16/`
+- [ ] **GIN-5 + RWPE** · base / base+GFP · rwpe16 → `Outputs/RWPE/GIN/gin_mp-base_readout-full_dir-in_enc-rwpe16/`
+- [ ] **GIN-4 + RWPE** · base+GFP / base+GFP · rwpe16 → `Outputs/RWPE/GIN/gin_mp-full_readout-full_dir-in_enc-rwpe16/`
+- [ ] **GAT-5 + RWPE** · base / base+GFP · rwpe16 → `Outputs/RWPE/GAT/gat_mp-base_readout-full_dir-in_enc-rwpe16/`
+- [ ] **GAT-4 + RWPE** · base+GFP / base+GFP · rwpe16 → `Outputs/RWPE/GAT/gat_mp-full_readout-full_dir-in_enc-rwpe16/`
+- [ ] **PNA-5 + RWPE** · base / base+GFP · rwpe16 → `Outputs/RWPE/PNA/pna_mp-base_readout-full_dir-in_enc-rwpe16/`
+- [ ] **PNA-4 + RWPE** · base+GFP / base+GFP · rwpe16 → `Outputs/RWPE/PNA/pna_mp-full_readout-full_dir-in_enc-rwpe16/`
+- [ ] **TR-5 + RWPE** · base / base+GFP · rwpe16 → `Outputs/RWPE/TRANSFORMER/transformer_mp-base_readout-full_dir-in_enc-rwpe16/`
+- [ ] **TR-4 + RWPE** · base+GFP / base+GFP · rwpe16 → `Outputs/RWPE/TRANSFORMER/transformer_mp-full_readout-full_dir-in_enc-rwpe16/`
 - [ ] **k = 8 runs** (`rwpe8`, same configs) — only if k = 16 shows an uplift (rule in section 1)
 
 ### Cross-checks (optional)
@@ -166,6 +167,10 @@ on validation F1. Summary file: `Outputs/<FAMILY>/batch_summary_rwpe.csv`.*
 
 *Newest first. Unticked = in progress · ticked = finished and synced.*
 
+- [ ] **4 Oct** — GFP `tuned` sheet (64 columns) computed in a rewritten `GFP_experiments.ipynb`;
+      the four single-factor sheets of August (win48 / win120 / lc10 / rich) removed as
+      uninformative; the "52 % / 84 % of hop gaps" claim did not reproduce and was replaced by the
+      recomputed per-typology durations (`Progress_Report.md` §3); V0 relabelled "paper, cycles ≤ 6"
 - [ ] **4 Oct** — RWPE node encoding: `rwpe_compute.py` + `RWPE_encoding.ipynb` (k = 8 and
       k = 16 per snapshot, self-loops dropped, checked against PyG `AddRandomWalkPE`,
       `Data/rwpe/`); `NODE_ENC` knob in `gnn_core.py` (only `node_proj` widens);
@@ -201,7 +206,7 @@ on validation F1. Summary file: `Outputs/<FAMILY>/batch_summary_rwpe.csv`.*
 
 **Knobs** (the only things that change between runs): `OPERATOR` (gin | pna | gat | transformer) ·
 `MP_EDGE_FEATS` (none | base | full) · `READOUT_EDGE_FEATS` (base | full | gfp) ·
-`NODE_ENC` (none | rwpe8 | rwpe16 | node2vec) · `GFP_VARIANT` (v0 | win48 | win120 | lc10 | rich) ·
+`NODE_ENC` (none | rwpe8 | rwpe16 | node2vec) · `GFP_VARIANT` (v0 | tuned) ·
 `MP_DIRECTION` (in | bidirectional) · `TEMPORAL_SAMPLING` (on | off).
 
 **Config order per family** (`CONFIGS` in every operator notebook, in this order):

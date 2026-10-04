@@ -99,7 +99,7 @@ operators is a change to the fixed architecture — stop and say so.
 **The only things that may change between runs are the knobs:**
 `OPERATOR` (gin | pna | gat | transformer) · `MP_EDGE_FEATS` (none | base | full) ·
 `READOUT_EDGE_FEATS` (base | full | gfp) · `NODE_ENC` (none | rwpe8 | rwpe16 | node2vec) ·
-`GFP_VARIANT` (v0 | win48 | win120 | lc10 | rich) · `MP_DIRECTION` (in | bidirectional) ·
+`GFP_VARIANT` (v0 | tuned) · `MP_DIRECTION` (in | bidirectional) ·
 `TEMPORAL_SAMPLING` (on | off). Adding features changes **only input-projection widths**.
 
 If I ask for something that would change dims, depth, hyperparameters, or protocol — even
@@ -137,7 +137,7 @@ them here. Rules that apply when implementing:
   is a null result. Test is never used to choose.
 - Stage 1 = 8 runs: config 5 (mp base / readout full) and config 4 (mp full / readout full)
   with `rwpe16` for GIN, GATv2, PNA and Transformer, from `RWPE_fixed_architecture.ipynb`
-  (one operator per Kaggle session). Always comment on overfitting from the curves (config 4
+  (all eight in one Kaggle session). Always comment on overfitting from the curves (config 4
   overfit for GIN, mildly for PNA and the Transformer, without RWPE).
 - Known caveat, written with the results: val/test RWPE also reflects edges later than the
   seed edge — the same caveat as neighbour sampling.
@@ -193,15 +193,17 @@ without an explicit request. Known invariants:
   `fit_transform` leaks the future — never use it.
 - **Bank target encoding:** train-window rates frozen for val/test; strictly-earlier-only for
   train rows; smoothing m = 200.
-- **Normalisation** fit on train only (`standard_scaler.pkl`). GFP variants (win48 / win120 /
-  lc10 / rich) in `Data/gfp_variants/` are swappable into `edge_attr[:, 20:81]` after the same
-  train-fit recipe (the "GFP with data-tuned windows" item in `EXPERIMENTS.md`).
+- **Normalisation** fit on train only (`standard_scaler.pkl`). The data-tuned GFP sheet
+  (`Data/gfp_variants/tuned.npy`, 64 columns: 48 h windows, cycles ≤ 12, bins [2, 4, 6, 8]) is
+  swappable into `edge_attr[:, 20:81]` after the same train-fit recipe (the "GFP tuned to the
+  data" item in `EXPERIMENTS.md`).
 - Any change that could let future information reach training is a bug. Flag it explicitly.
   If results look too good (big jumps, val ≫ train, near-perfect scores), suspect leakage first.
 
 ## 6. Run artifacts & naming
 
-Every completed run writes to `Outputs/<FAMILY>/<run_name>/`:
+Every completed run writes to `Outputs/<FAMILY>/<run_name>/` (node-encoding runs:
+`Outputs/RWPE/<FAMILY>/<run_name>/`):
 `results.json`, `history.csv`, `curves.png`, `best.pt`, `predictions.csv`; plus
 `batch_summary.csv` per batch (all columns of section 4, every split).
 
@@ -246,10 +248,10 @@ mirror both to their Notion pages. Mark superseded rows `SUPERSEDED`, never dele
   `core.in_degree_histogram(graphs['train'])`, which `PNAConv` needs; all other notebooks omit
   it. Why: the other operators ignore the histogram, and `run_experiment()` computes it itself
   for PNA, so the argument would be dead code there and would mean editing executed notebooks.
-  Second exception: `RWPE_fixed_architecture.ipynb` runs node-encoding configs for any
-  operator (one operator per Kaggle session), so its config entries carry `operator` and
-  `node_enc`, its runs land in that operator's `Outputs/<FAMILY>/`, and its summary is
-  `batch_summary_rwpe.csv` so the family's own `batch_summary.csv` is never overwritten.
+  Second exception: `RWPE_fixed_architecture.ipynb` runs node-encoding configs for every
+  operator in one session (so one executed notebook holds all their training logs); its
+  config entries carry `operator` and `node_enc`, its runs land in `Outputs/RWPE/<FAMILY>/<run>/` with `batch_summary_rwpe.csv`
+  per family, separate from the operator batches in `Outputs/<FAMILY>/`.
 - **Kaggle environment cell — keep verbatim in every operator notebook.** The pinned
   PyTorch / PyG stack below is known to work on Kaggle GPU; do not "simplify", reorder, or
   change versions without my OK (a mismatched torch / torch-scatter build is the usual cause of

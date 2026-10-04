@@ -12,14 +12,14 @@ Full write-up of the work so far: **[Progress_Report.md](Progress_Report.md)**.
 |---|---|---|
 | `EDA.ipynb` | any Python 3 with pandas/matplotlib/yfinance | Exploratory analysis of HI-Small; USD conversion of amounts; findings that drive the feature design |
 | `Data_preparation.ipynb` | `graph_feature_preprocessor` | Truncation at Sep 10, 20 baseline edge features, 6 node features, 61 GFP structural features, 60/20/20 temporal split, train-fit normalization, PyG graph snapshots |
-| `GFP_experiments.ipynb` | `graph_feature_preprocessor` | Four GFP parameter variants (win48, win120, lc10, rich) with data-driven rationale |
+| `GFP_experiments.ipynb` | `graph_feature_preprocessor` | One data-tuned GFP sheet (`tuned`: 48 h windows, cycles ≤ 12, bins [2, 4, 6, 8]) next to the paper baseline V0, with the measurements on the 370 annotated attempts that motivate it, causality and alignment checks |
 | `Data_checks.ipynb` | `graph_feature_preprocessor` | Shows what every artifact in `Data/` is and looks like, and verifies it (row counts, alignment, leakage properties, graph consistency) with a summary table |
 | `GIN_fixed_architecture.ipynb` | Kaggle (GPU) | GIN edge classifier with a **fixed architecture**; knobs select which edge features enter message passing / the classifier, incoming-only vs bidirectional aggregation, and optional temporal sampling |
 | `GAT_fixed_architecture.ipynb` | Kaggle (GPU) | Same notebook for the GATv2 operator (4 heads × 32 = 128, edge features via `edge_dim`); only the config cell differs — everything shared is imported from `gnn_core.py` |
 | `PNA_fixed_architecture.ipynb` | Kaggle (GPU) | Same notebook for the PNA operator (mean / max / min / std aggregators × degree scalers calibrated on the training-graph in-degree histogram, edge features via `edge_dim`); only the config cell differs |
 | `TRANSFORMER_fixed_architecture.ipynb` | Kaggle (GPU) | Same notebook for the graph transformer operator (PyG `TransformerConv`, 4 heads × 32 = 128, attention with edge features via `edge_dim` over the sampled neighbourhood — local, not full-graph); only the config cell differs |
 | `RWPE_encoding.ipynb` | `graph_feature_preprocessor` (CPU; also runs on Kaggle) | Random-walk positional encoding (RWPE) per snapshot, k = 8 and 16: toy sanity test against PyG `AddRandomWalkPE`, edge-list check against the graph files, self-loop tables (why self-loops are dropped from P), compute via `rwpe_compute.py` with a per-step time / RAM / fill-in log, checks, diagnostics, value scale → `Data/rwpe/` |
-| `RWPE_fixed_architecture.ipynb` | Kaggle (GPU) | Same notebook for the node-encoding runs (`NODE_ENC = rwpe16` on configs 5 and 4 of every operator; one operator per session); RWPE files from the Kaggle dataset `hi-small-rwpe`; summary `batch_summary_rwpe.csv` |
+| `RWPE_fixed_architecture.ipynb` | Kaggle (GPU) | Same notebook for the node-encoding runs (`NODE_ENC = rwpe16` on configs 5 and 4 of every operator, all eight in one session); RWPE files from the Kaggle dataset `hi-small-rwpe`; results in `Outputs/RWPE/<FAMILY>/`, summary `batch_summary_rwpe.csv` per family |
 
 `gnn_core.py` — everything shared by the operator notebooks: the fixed model template,
 `build_model(operator, …)`, loaders, the training loop with validation threshold sweep, metrics on
@@ -45,7 +45,7 @@ Requires a WSL venv: `python3 -m venv ~/gfp_env && ~/gfp_env/bin/pip install 'nu
 ## Outputs (`Data/`, not versioned — regenerate with the notebooks)
 
 `edge_features.csv` · `node_features.csv` · `feature_meta.json` (feature groups, dims, ablation grid) ·
-`standard_scaler.pkl` · `train/val/test_graph.pt` · `account_to_idx.pkl` · `gfp_variants/*.npy` ·
+`standard_scaler.pkl` · `train/val/test_graph.pt` · `account_to_idx.pkl` · `gfp_variants/tuned.npy` (+ `tuned_cols.json`) ·
 `rwpe/rwpe_k{8,16}_{train,val,test}.pt` (RWPE node encodings, float32 [515,070, k])
 
 ## Model comparison
