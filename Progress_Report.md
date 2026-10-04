@@ -36,8 +36,45 @@ The 61 GFP structural edge features are covered in §3.
 | Feature | What it is | How it is computed |
 |---|---|---|
 | `EntityType_*` — 6 one-hot columns: Corporation, Individual, Partnership, Sole, Country, Direct | the kind of account holder — the only account attribute the dataset provides | first word of the entity name in `HI-Small_accounts.csv` ("Corporation #33520" → Corporation), one-hot encoded; accounts that appear only in transactions get an all-zero vector |
+| `RWPE_1..16` — 16 random-walk return probabilities (`NODE_ENC = rwpe16`; `rwpe8` = the first 8) — ⬜ runs planned (§7.5) | where the account sits in the graph: step k = probability that a k-step random walk that starts at the account is back at it; an account on a cycle of length k gets a high step k | per snapshot from that snapshot's own edges (train / train+val / all) with P = D_out⁻¹ A — the maths of PyG `AddRandomWalkPE`, computed exactly by `rwpe_compute.py` and checked in `RWPE_encoding.ipynb`; self-loops dropped when building P (table below), so step 1 is 0; values in [0, 1]; appended to the 6 entity columns at run time (`Data/rwpe/`), graph files unchanged |
 
 Everything else the model knows about an account comes from message passing over its transactions.
+
+**Why RWPE drops self-loops** (sender = receiver; the graph and `Is_Self_Loop` keep them):
+
+| Self-loop edges | train | val | test | all |
+|---|---|---|---|---|
+| Share of the split's edges | 18.0 % | 2.2 % | 2.1 % | 11.6 % |
+| Laundering rate among them | 0.001 % | 0.005 % | 0.010 % | 0.001 % |
+| Payment format | 81 % Reinvestment (every Reinvestment is a self-loop), 12 % ACH, 4 % Bitcoin; other formats ≤ 0.5 % self-loop | | | |
+| Accounts with ≥ 1 self-loop | 71 % of all accounts | | | |
+
+- With self-loops, step 1 would mostly be a "has Reinvestment" flag that `Is_Self_Loop` and
+  `PayFmt_Reinvestment` already carry, and its distribution would shift between the train
+  window and val/test. Dropped from P only; nothing else changes.
+- Known caveat: on the val/test snapshots an account's RWPE also reflects transactions later
+  than the seed edge — the same caveat as neighbour sampling, reported as a limitation.
+
+**What the RWPE files contain** (k = 16, per snapshot; diagnostics in `RWPE_encoding.ipynb` §6):
+
+| | train | val | test |
+|---|---|---|---|
+| Accounts that never send once self-loops are dropped (RWPE 0 by construction) | 45.8 % | 43.2 % | 40.7 % |
+| Accounts with an all-zero RWPE (no closed directed walk of length ≤ 16) | 99.4 % | 99.0 % | 98.4 % |
+| Accounts with a non-zero RWPE | 2,990 | 5,264 | 8,414 |
+| Evaluated edges with a non-zero-RWPE endpoint — all / laundering | 2.1 % / 15.2 % | 3.7 % / 16.8 % | 5.3 % / 22.4 % |
+| Laundering rate of evaluated edges with / without such an endpoint | 0.56 % / 0.07 % | 0.48 % / 0.09 % | 0.48 % / 0.09 % |
+| Compute (`rwpe_compute.py`, CPU): seconds / peak RAM / non-zeros of P¹⁶ | 47 s / 1.8 GB / 100 M | 59 s / 2.3 GB / 144 M | 82 s / 2.9 GB / 205 M |
+
+- Money mostly flows forward, so a directed walk rarely returns: RWPE is non-zero for under
+  2 % of accounts. Those accounts sit on directed cycles and are 5–8× more often at the ends
+  of laundering edges — a rare but sharp signal.
+- **Decision: keep the directed walk (walks follow the money).** Non-zero = the account sits
+  on a directed money cycle of length ≤ 16; an undirected walk would mostly re-encode degree
+  (already in GFP) and is not computable exactly (P² through hubs of degree ~168k).
+- Value scale: every column is > 99 % zeros with the rest in [0, 1], like the entity one-hots;
+  no scaler is applied (standardising would turn the zeros into an offset and the rare values
+  into outliers).
 
 **Baseline edge features — 20 per transaction**
 
@@ -48,7 +85,7 @@ Everything else the model knows about an account comes from message passing over
 | `Hour_Sin`, `Hour_Cos` | time of day, cyclic | sin / cos of 2π · hour / 24 | midday peak 0.17 % |
 | `DayOfWeek_Sin`, `DayOfWeek_Cos` | day of week, cyclic | sin / cos of 2π · weekday / 7 | Sunday 0.31 % ≈ 3× weekdays |
 | `Is_Weekend` | weekend flag | 1 on Saturday / Sunday | same signal as above |
-| `Is_Self_Loop` | account pays itself | 1 if sender account = receiver account | near-zero laundering risk |
+| `Is_Self_Loop` | account pays itself | 1 if sender account = receiver account | 0.0014 % laundering (8 of 590,819) vs 0.101 % for other edges — near-zero risk; self-loops stay in the graph, see §4 |
 | `Same_Bank` | intra-bank transfer | 1 if sender bank = receiver bank | 0.012 % same-bank vs 0.101 % cross-bank — 8× separation |
 | `Dt_Src_Log` | sender burstiness | log1p of the seconds since the sender's previous transaction; first transaction → 10 days | laundering senders burst: median gap 0.0 h vs 0.3 h |
 | `Dt_Dst_Log` | receiver dormancy | same for the receiver | receivers are dormant mules: 8.2 h vs 0.4 h |
@@ -113,6 +150,32 @@ excluded from loss/metrics but visible to message passing.
 | val | 4,061,789 (train + val) | 1,015,447 (val part) | Sep 6 13:34 → Sep 8 16:09 | 1,082 (0.107 %) |
 | test | 5,077,237 (all) | 1,015,448 (test part) | Sep 8 16:09 → Sep 10 23:59 | 1,143 (0.113 %) |
 
+**Self-loops** — transactions whose sender and receiver are the same account. They are **kept** as
+edges of every snapshot and marked by the `Is_Self_Loop` feature; no preprocessing or model step
+removes them. They therefore take part in message passing (a node's own message to itself; with
+`bidirectional` the flipped edge is the same edge, so it is delivered twice), in neighbour
+sampling, in the PNA in-degree histogram and in the GFP fan / degree statistics (§3; checked: a
+self-loop that is an account's first transaction gets `source_fan_in = source_deg_in = 1`, an
+ordinary first transaction gets 0). GATv2 adds
+a synthetic self-loop to every node on top (`add_self_loops=True`, `fill_value='mean'`, PyG
+defaults), so there a node with a real self-loop attends to itself through both. Rationale for
+keeping them: they are real transactions a deployed system must score, the flag already lets the
+model discount them, and dropping them would change the graph under all finished runs. The only
+place they are dropped is the planned RWPE random-walk encoding (`EXPERIMENTS.md`).
+
+| Edges | Total | Self-loops | Share | Laundering self-loops |
+|---|---|---|---|---|
+| all (after truncation) | 5,077,237 | 590,819 | 11.6 % | 8 (0.0014 %; other edges 0.101 %) |
+| train | 3,046,342 | 547,862 | 18.0 % | 5 |
+| val | 1,015,447 | 21,896 | 2.2 % | 1 |
+| test | 1,015,448 | 21,061 | 2.1 % | 2 |
+
+The train share is high because all 481,056 Reinvestment transactions are self-loops and all of
+them are dated Sep 1 (45.5 % of that day's edges). From Sep 2 on, self-loops are a steady ≈ 2.1 %
+of each day (over the whole window: ACH 70,954 · Bitcoin 26,317 · Cheque 6,066 · Credit Card
+4,176 · Cash 1,455 · Wire 795). These edges are near-certain negatives, so the train → test shift
+adds easy negatives to training but does not inflate the test metrics.
+
 ## 5 · Models — four operators
 
 One template for every operator (`gnn_core.py`); only the aggregation rule inside the
@@ -129,7 +192,7 @@ message-passing box differs. The table lists what is fixed and the knobs that ma
 | Seed | 42 (seed sweep on the winners later) |
 | Invariant parameters | GIN **67,587** · GATv2 **67,585** · PNA **427,265** · Transformer **133,121** — identical across feature configs within a family, verified every run; only the edge projections and the readout input widen |
 | Comparability across operators | Same number of layers (2) and same embedding dimension (128) for every operator; the parameter count may differ by operator. Total parameters over the 7 configs: GIN 103,043–131,843 · GATv2 103,041–131,585 · PNA 561,537–623,105 · Transformer 168,577–197,121 (PNA's 12 aggregator × scaler views feed a 1,664 → 128 MLP per layer; the Transformer has four 128 × 128 projections per layer where GATv2 has two) |
-| Knobs — all that may change | `OPERATOR` gin / pna / gat / transformer · `MP_EDGE_FEATS` none / base / full · `READOUT_EDGE_FEATS` base / full / gfp · `MP_DIRECTION` in / bidirectional · `TEMPORAL_SAMPLING` on / off |
+| Knobs — all that may change | `OPERATOR` gin / pna / gat / transformer · `MP_EDGE_FEATS` none / base / full · `READOUT_EDGE_FEATS` base / full / gfp · `NODE_ENC` none / rwpe8 / rwpe16 (node encoding appended to the 6 entity columns; only `node_proj` widens to (6 + k) → 128 and `invariant_params` counts it at the base width 6) · `MP_DIRECTION` in / bidirectional · `TEMPORAL_SAMPLING` on / off |
 
 ### 5.1 GIN / GINE — sum aggregation
 
@@ -148,6 +211,9 @@ message-passing box differs. The table lists what is fixed and the knobs that ma
   the original GAT).
 - 4 heads × 32 = 128, concatenated; edge features enter the attention score and the message via
   `edge_dim` — `lin_edge` is the only width-dependent tensor.
+- Self-loops: `add_self_loops=True` with `fill_value='mean'` (PyG defaults, written out in
+  `gnn_core.py`) — every node also attends to itself, its synthetic self-loop carrying the mean of
+  its incoming edge features; real self-loop transactions (§4) stay in the graph as well.
 - Same two-layer template, residual, dropout; invariant parameters 67,585 (attention vectors
   and biases replace the GIN MLP).
 - Fits a Kaggle T4 at the full 8,192 seed edges per batch.
@@ -323,25 +389,26 @@ Best epoch 20 · threshold 0.685 · params 108,291 · `Outputs/GIN/gin_mp-none_r
 
 #### 7.1.8 Best of the GIN family
 
-Ranked by test F1. Precision, recall, PR-AUC, Precision@5 % and Recall@5 % are **test** values at
-the validation threshold. Precision@5 % is bounded by prevalence / 0.05 — 0.015 on train, 0.021
-on val, 0.023 on test: a 5 % alert budget is ~45× the laundering share, so every run sits near
-the ceiling and the column cannot separate models; Recall@5 % is the informative operating-point
-number.
+Ranked by **validation F1** — the metric every choice is made on (bold = the family's best;
+gaps under 0.02 are ties). Test is shown, never used to choose. Precision, recall, PR-AUC,
+Precision@5 % and Recall@5 % are **test** values at the validation threshold. Precision@5 % is
+bounded by prevalence / 0.05 — 0.015 on train, 0.021 on val, 0.023 on test: a 5 % alert budget
+is ~45× the laundering share, so every run sits near the ceiling and the column cannot separate
+models; Recall@5 % is the informative operating-point number.
 
 | Run | mp / readout | best ep | F1 train | F1 val | F1 test | Precision | Recall | PR-AUC | Precision@5 % | Recall@5 % |
 |---|---|---|---|---|---|---|---|---|---|---|
-| GIN-5 | base / base+GFP | 8 | 0.534 | 0.609 | **0.525** | 0.678 | 0.429 | 0.484 | 0.0195 | 0.867 |
+| GIN-5 | base / base+GFP | 8 | 0.534 | **0.609** | 0.525 | 0.678 | 0.429 | 0.484 | 0.0195 | 0.867 |
 | GIN-4 | base+GFP / base+GFP | 10 | 0.563 | 0.598 | 0.512 | 0.743 | 0.390 | 0.479 | 0.0186 | 0.827 |
-| GIN-3 | none / base+GFP | 11 | 0.453 | 0.548 | 0.471 | 0.635 | 0.375 | 0.435 | 0.0194 | 0.861 |
 | GIN-2 | base / base | 15 | 0.548 | 0.554 | 0.456 | 0.659 | 0.348 | 0.392 | 0.0174 | 0.771 |
+| GIN-3 | none / base+GFP | 11 | 0.453 | 0.548 | 0.471 | 0.635 | 0.375 | 0.435 | 0.0194 | 0.861 |
 | GIN-6 | base / GFP only | 19 | 0.526 | 0.533 | 0.440 | 0.507 | 0.388 | 0.395 | 0.0173 | 0.770 |
 | GIN-1 | none / base | 13 | 0.432 | 0.439 | 0.371 | 0.481 | 0.302 | 0.328 | 0.0183 | 0.814 |
 | GIN-7 | none / GFP only | 20 | 0.273 | 0.319 | 0.256 | 0.265 | 0.248 | 0.198 | 0.0164 | 0.731 |
 
-**Best of the family: GIN-5** — baseline features in message passing, all 81 features at the
-readout: test F1 **0.525** (+0.154 over GIN-1), best recall and Recall@5 %, no overfitting
-(curves in §7.1.5).
+**Best of the family: GIN-5** by validation F1 (0.609; GIN-4 at 0.598 is inside the tie band
+but overfits) — baseline features in message passing, all 81 features at the readout: test F1
+0.525 (+0.154 over GIN-1), best recall and Recall@5 %, no overfitting (curves in §7.1.5).
 
 - **RQ1:** edge features inside message passing help — +0.085 F1 (GIN-1 → GIN-2).
 - **RQ2:** GFP features help further and their value sits at the decision layer — +0.100 from
@@ -463,21 +530,24 @@ Best epoch 20 · threshold 0.385 · params 108,289 · `Outputs/GAT/gat_mp-none_r
 
 #### 7.2.8 Best of the GATv2 family
 
-Ranked by test F1; columns as in §7.1.8 (test values at the validation threshold).
+Ranked by validation F1 (bold = the family's best, ties within 0.02); columns as in §7.1.8
+(test values at the validation threshold, never used to choose).
 
 | Run | mp / readout | best ep | F1 train | F1 val | F1 test | Precision | Recall | PR-AUC | Precision@5 % | Recall@5 % |
 |---|---|---|---|---|---|---|---|---|---|---|
-| GAT-5 | base / base+GFP | 20 | 0.475 | 0.550 | **0.500** | 0.720 | 0.383 | 0.451 | 0.0192 | 0.851 |
-| GAT-4 | base+GFP / base+GFP | 19 | 0.507 | 0.570 | 0.488 | 0.611 | 0.406 | 0.458 | 0.0189 | 0.841 |
+| GAT-4 | base+GFP / base+GFP | 19 | 0.507 | **0.570** | 0.488 | 0.611 | 0.406 | 0.458 | 0.0189 | 0.841 |
+| GAT-5 | base / base+GFP | 20 | 0.475 | **0.550** | 0.500 | 0.720 | 0.383 | 0.451 | 0.0192 | 0.851 |
 | GAT-3 | none / base+GFP | 20 | 0.452 | 0.524 | 0.469 | 0.615 | 0.379 | 0.419 | 0.0192 | 0.853 |
 | GAT-2 | base / base | 13 | 0.388 | 0.498 | 0.435 | 0.590 | 0.345 | 0.389 | 0.0189 | 0.841 |
-| GAT-1 | none / base | 20 | 0.341 | 0.434 | 0.392 | 0.513 | 0.317 | 0.330 | 0.0189 | 0.841 |
 | GAT-6 | base / GFP only | 17 | 0.379 | 0.441 | 0.379 | 0.411 | 0.351 | 0.312 | 0.0177 | 0.787 |
+| GAT-1 | none / base | 20 | 0.341 | 0.434 | 0.392 | 0.513 | 0.317 | 0.330 | 0.0189 | 0.841 |
 | GAT-7 | none / GFP only | 20 | 0.218 | 0.240 | 0.184 | 0.154 | 0.228 | 0.112 | 0.0143 | 0.637 |
 
-**Best of the family: GAT-5** — the same configuration that won for GIN: baseline features in
-message passing, all 81 features at the readout; test F1 **0.500** (+0.108 over GAT-1), highest
-test precision, no overfitting (curves in §7.2.5).
+**Best of the family: GAT-4 ≈ GAT-5, a tie** by validation F1 (0.570 vs 0.550, inside the 0.02
+band; on test GAT-5 0.500 vs GAT-4 0.488, also a tie). Both put the baseline features into the
+attention and all 81 features at the readout — the configuration that won for GIN; GAT-4 also
+feeds GFP into the attention. GAT-5 has the highest test precision; neither overfits (curves in
+§7.2.4, §7.2.5).
 
 - **RQ1:** edge features inside the attention help, but half as much as for GIN — +0.043 F1
   (GAT-1 → GAT-2).
@@ -621,21 +691,22 @@ Best epoch 14 · threshold 0.562 · params 566,785 · `Outputs/PNA/pna_mp-none_r
 
 #### 7.3.8 Best of the PNA family
 
-Ranked by test F1; columns as in §7.1.8 (test values at the validation threshold).
+Ranked by validation F1 (bold = the family's best, ties within 0.02); columns as in §7.1.8
+(test values at the validation threshold, never used to choose).
 
 | Run | mp / readout | best ep | F1 train | F1 val | F1 test | Precision | Recall | PR-AUC | Precision@5 % | Recall@5 % |
 |---|---|---|---|---|---|---|---|---|---|---|
-| PNA-4 | base+GFP / base+GFP | 15 | 0.598 | 0.648 | **0.617** | 0.856 | 0.482 | 0.575 | 0.0200 | 0.888 |
-| PNA-2 | base / base | 14 | 0.585 | 0.651 | 0.614 | 0.776 | 0.507 | 0.578 | 0.0198 | 0.881 |
-| PNA-5 | base / base+GFP | 15 | 0.587 | 0.648 | 0.611 | 0.800 | 0.494 | 0.574 | 0.0201 | 0.892 |
+| PNA-2 | base / base | 14 | 0.585 | **0.651** | 0.614 | 0.776 | 0.507 | 0.578 | 0.0198 | 0.881 |
+| PNA-4 | base+GFP / base+GFP | 15 | 0.598 | **0.648** | 0.617 | 0.856 | 0.482 | 0.575 | 0.0200 | 0.888 |
+| PNA-5 | base / base+GFP | 15 | 0.587 | **0.648** | 0.611 | 0.800 | 0.494 | 0.574 | 0.0201 | 0.892 |
 | PNA-6 | base / GFP only | 16 | 0.564 | 0.621 | 0.575 | 0.751 | 0.466 | 0.540 | 0.0195 | 0.868 |
 | PNA-3 | none / base+GFP | 14 | 0.495 | 0.574 | 0.512 | 0.680 | 0.410 | 0.472 | 0.0195 | 0.865 |
 | PNA-1 | none / base | 12 | 0.467 | 0.491 | 0.452 | 0.600 | 0.363 | 0.389 | 0.0193 | 0.856 |
 | PNA-7 | none / GFP only | 14 | 0.340 | 0.406 | 0.356 | 0.353 | 0.360 | 0.290 | 0.0178 | 0.793 |
 
-**Best of the family: PNA-4** by test F1 (**0.617**), but PNA-2, PNA-4 and PNA-5 are a three-way
-tie (test 0.611–0.617, validation 0.648–0.651). PNA-2 gets there with the 20 baseline features
-alone, no GFP (curves in §7.3.2, §7.3.4, §7.3.5).
+**Best of the family: PNA-2 ≈ PNA-4 ≈ PNA-5, a three-way tie** by validation F1 (0.648–0.651;
+test 0.611–0.617, also a tie). PNA-2 gets there with the 20 baseline features alone, no GFP
+(curves in §7.3.2, §7.3.4, §7.3.5).
 
 - **RQ1:** edge features inside message passing are the big lever for PNA — +0.162 F1
   (PNA-1 → PNA-2), about twice the GIN gain and four times the GATv2 gain.
@@ -789,21 +860,22 @@ Best epoch 20 · threshold 0.389 · params 173,825 · `Outputs/TRANSFORMER/trans
 
 #### 7.4.8 Best of the Graph Transformer family
 
-Ranked by test F1; columns as in §7.1.8 (test values at the validation threshold).
+Ranked by validation F1 (bold = the family's best, ties within 0.02); columns as in §7.1.8
+(test values at the validation threshold, never used to choose).
 
 | Run | mp / readout | best ep | F1 train | F1 val | F1 test | Precision | Recall | PR-AUC | Precision@5 % | Recall@5 % |
 |---|---|---|---|---|---|---|---|---|---|---|
-| TR-4 | base+GFP / base+GFP | 15 | 0.597 | 0.644 | **0.602** | 0.788 | 0.487 | 0.574 | 0.0198 | 0.881 |
-| TR-5 | base / base+GFP | 14 | 0.569 | 0.629 | 0.598 | 0.832 | 0.466 | 0.553 | 0.0196 | 0.871 |
+| TR-4 | base+GFP / base+GFP | 15 | 0.597 | **0.644** | 0.602 | 0.788 | 0.487 | 0.574 | 0.0198 | 0.881 |
+| TR-5 | base / base+GFP | 14 | 0.569 | **0.629** | 0.598 | 0.832 | 0.466 | 0.553 | 0.0196 | 0.871 |
 | TR-2 | base / base | 18 | 0.574 | 0.624 | 0.586 | 0.802 | 0.461 | 0.549 | 0.0197 | 0.873 |
 | TR-6 | base / GFP only | 20 | 0.532 | 0.577 | 0.534 | 0.633 | 0.462 | 0.508 | 0.0191 | 0.850 |
 | TR-3 | none / base+GFP | 20 | 0.437 | 0.511 | 0.448 | 0.535 | 0.386 | 0.411 | 0.0193 | 0.856 |
 | TR-1 | none / base | 18 | 0.300 | 0.427 | 0.370 | 0.389 | 0.353 | 0.337 | 0.0188 | 0.835 |
 | TR-7 | none / GFP only | 20 | 0.231 | 0.255 | 0.204 | 0.170 | 0.254 | 0.139 | 0.0148 | 0.659 |
 
-**Best of the family: TR-4** by test F1 (**0.602**), but TR-2, TR-4 and TR-5 are a three-way tie
-(test 0.586–0.602, validation 0.624–0.644) — the same three configurations as the PNA tie (curves
-in §7.4.2, §7.4.4, §7.4.5).
+**Best of the family: TR-4 ≈ TR-5, a tie** by validation F1 (0.644 vs 0.629), with TR-2 (0.624)
+exactly at the 0.02 edge; on test the three are 0.586–0.602, also ties — the same three
+configurations as the PNA tie (curves in §7.4.2, §7.4.4, §7.4.5).
 
 - **RQ1:** edge features inside message passing are the big lever — +0.216 F1 (TR-1 → TR-2),
   the largest gain of the four operators.
@@ -843,6 +915,35 @@ in §7.4.2, §7.4.4, §7.4.5).
 - No sign of leakage: same data, splits and loaders as the other families, test below
   validation in every run.
 
+### 7.5 RWPE node encoding — ⬜ planned (stage 1: 8 runs)
+
+Does a random-walk positional encoding (RWPE, §2) help when everything else is held fixed?
+Each run repeats one finished configuration with `NODE_ENC = rwpe16`; only `node_proj` widens
+to (6 + 16) → 128 (+2,048 parameters), `invariant_params` stays at the family value.
+Notebook `RWPE_fixed_architecture.ipynb`, one operator per Kaggle session; outputs in
+`Outputs/<FAMILY>/<run>_enc-rwpe16/`.
+
+| Run | Repeats | Compare with (validation F1) | Status |
+|---|---|---|---|
+| GIN-5 + RWPE | base / base+GFP | GIN-5 0.609 | ⬜ |
+| GIN-4 + RWPE | base+GFP / base+GFP | GIN-4 0.598 (overfit without RWPE) | ⬜ |
+| GAT-5 + RWPE | base / base+GFP | GAT-5 0.550 | ⬜ |
+| GAT-4 + RWPE | base+GFP / base+GFP | GAT-4 0.570 | ⬜ |
+| PNA-5 + RWPE | base / base+GFP | PNA-5 0.648 | ⬜ |
+| PNA-4 + RWPE | base+GFP / base+GFP | PNA-4 0.648 (mild overfit without RWPE) | ⬜ |
+| TR-5 + RWPE | base / base+GFP | TR-5 0.629 | ⬜ |
+| TR-4 + RWPE | base+GFP / base+GFP | TR-4 0.644 (mild overfit without RWPE) | ⬜ |
+
+- **Decision rule, fixed in advance (validation F1 only, gap < 0.02 = tie):** k = 8 runs only
+  if k = 16 shows an uplift (> 0.02 over the matching run without RWPE); then keep k = 8 if it
+  ties with k = 16, otherwise keep k = 16. No uplift at k = 16 → stop, RWPE is a null result.
+  Test is never used to choose.
+- Each finished run gets the same per-run section as above (metrics table on train / val /
+  test, curves, ≤ 3 bullets with a comment on overfitting from the curves), plus one table per
+  operator: without RWPE vs with RWPE, all metrics on all three splits.
+- Caveat to repeat with every result: val/test RWPE also reflects edges later than the seed
+  edge (§2).
+
 ## 8 · Repository map
 
 | File | Content |
@@ -854,9 +955,12 @@ in §7.4.2, §7.4.4, §7.4.5).
 | `gnn_core.py` | shared code for every operator: fixed model template, `build_model(operator, …)`, loaders, training loop with validation threshold sweep, metrics on all splits, curves, saving, `invariant_params()` |
 | `GIN_fixed_architecture.ipynb` | the Kaggle notebook of the GIN family: config cell (7 runs) + loop over `gnn_core.py`; `GAT_fixed_architecture.ipynb` is the same notebook for GATv2 (only the config cell differs) |
 | `PNA_fixed_architecture.ipynb` / `TRANSFORMER_fixed_architecture.ipynb` | the same notebook for PNA and for the graph transformer (only the config cell differs); results in §7.3 and §7.4 |
+| `RWPE_encoding.ipynb` / `rwpe_compute.py` | RWPE node encoding per snapshot (toy sanity test against PyG `AddRandomWalkPE`, edge-list check against the graph files, self-loop tables, per-step time / RAM / fill-in log, checks, diagnostics, value scale); the script does the exact scipy computation, CPU only, locally or on Kaggle → `Data/rwpe/rwpe_k{8,16}_{train,val,test}.pt` |
+| `RWPE_fixed_architecture.ipynb` | the same Kaggle notebook for the node-encoding runs of §7.5: config entries carry `operator` and `node_enc` (one operator per session), RWPE files from the Kaggle dataset `hi-small-rwpe`; summary `batch_summary_rwpe.csv` |
 | `run_gfp_wsl.py` | causal batched GFP bridge (Windows snapml lacks GFP → runs in WSL) |
 | `Progress_Report.md` / `EXPERIMENTS.md` | markdown mirrors of this page (with the reference list) and of the experiments page — Notion is the main copy |
-| `Outputs/<FAMILY>/<run>/` (GIN, GAT, PNA, TRANSFORMER) | results.json (all splits, all metrics), history.csv, curves.png, best.pt, predictions.csv (the last two not versioned) • batch_summary.csv per batch |
+| `Outputs/<FAMILY>/<run>/` (GIN, GAT, PNA, TRANSFORMER) | results.json (all splits, all metrics), history.csv, curves.png, best.pt, predictions.csv (the last two not versioned) • batch_summary.csv per batch, batch_summary_rwpe.csv for the RWPE runs |
+| `Data/rwpe/` (not versioned) | `rwpe_k{8,16}_{train,val,test}.pt` (float32 [515,070, k]) + per-step logs; uploaded to Kaggle as the dataset `hi-small-rwpe` |
 
 ---
 

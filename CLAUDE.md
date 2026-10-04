@@ -98,7 +98,7 @@ operators is a change to the fixed architecture — stop and say so.
 
 **The only things that may change between runs are the knobs:**
 `OPERATOR` (gin | pna | gat | transformer) · `MP_EDGE_FEATS` (none | base | full) ·
-`READOUT_EDGE_FEATS` (base | full | gfp) · `NODE_ENC` (none | rwpe | node2vec) ·
+`READOUT_EDGE_FEATS` (base | full | gfp) · `NODE_ENC` (none | rwpe8 | rwpe16 | node2vec) ·
 `GFP_VARIANT` (v0 | win48 | win120 | lc10 | rich) · `MP_DIRECTION` (in | bidirectional) ·
 `TEMPORAL_SAMPLING` (on | off). Adding features changes **only input-projection widths**.
 
@@ -113,9 +113,34 @@ RWPE / Node2Vec node encodings, the transformer operator and the GFP variants ar
 **`EXPERIMENTS.md`** (sections 1–2 and the appendix "Fixed sizes for the planned extensions")
 and on the Notion experiments page, including the reasoning behind every size. Do not restate
 them here. Rules that apply when implementing:
-- Their sizes (k = 8, dim 8, 4 heads × 32) are fixed a priori — never tune them per run.
+- Their sizes (RWPE k = 16 / 8, Node2Vec dim = the RWPE k kept, 4 heads × 32) are fixed a
+  priori — never tune them per run.
 - Plan in `EXPERIMENTS.md` + Notion first, get my OK, then the notebook.
-- RWPE: reuse `add_rwpe()` from `../AML_GNN_GMA/gine_rwpe.ipynb`.
+- **RWPE (decided 4 Oct):** a node feature, computed once per snapshot on that snapshot's own
+  edges (train: train edges; val: train + val; test: all) — the same maths as PyG
+  `AddRandomWalkPE` (`add_rwpe()` in `../AML_GNN_GMA/gine_rwpe.ipynb`): P = D_out⁻¹ A, step k
+  = diag(Pᵏ). Computed by `rwpe_compute.py` (scipy, exact, checked against the PyG transform
+  in `RWPE_encoding.ipynb`), saved as `Data/rwpe/rwpe_k{8,16}_{split}.pt`, loaded by the
+  `NODE_ENC` knob (`none | rwpe8 | rwpe16`) → only `node_proj` widens to (6 + k) → 128;
+  `invariant_params` counts `node_proj` at the base width 6, so it stays at the family value.
+  The walk is **directed** (follows the money; decided 4 Oct after seeing that only ~1 % of
+  accounts get a non-zero vector): non-zero = the account sits on a directed money cycle of
+  length ≤ 16; an undirected walk would mostly re-encode degree (already in GFP) and is not
+  computable exactly (P² through hubs of degree ~168k).
+- **Self-loops are dropped when building P** (graph files and model inputs unchanged). Why:
+  self-loops are 18 % of train edges but 2 % of val/test, and 81 % of them are Reinvestment,
+  so with them step 1 would mostly repeat `Is_Self_Loop` / `PayFmt_Reinvestment` and shift
+  between splits. Step 1 is therefore 0 for every account (asserted).
+- **k rule:** k = 16 first, decided on validation F1 only (gap < 0.02 = tie). k = 8 runs only
+  if k = 16 shows an uplift (> 0.02 validation F1 over the matching run without RWPE); then
+  keep k = 8 if it ties with k = 16, otherwise keep k = 16. No uplift at k = 16 → stop, RWPE
+  is a null result. Test is never used to choose.
+- Stage 1 = 8 runs: config 5 (mp base / readout full) and config 4 (mp full / readout full)
+  with `rwpe16` for GIN, GATv2, PNA and Transformer, from `RWPE_fixed_architecture.ipynb`
+  (one operator per Kaggle session). Always comment on overfitting from the curves (config 4
+  overfit for GIN, mildly for PNA and the Transformer, without RWPE).
+- Known caveat, written with the results: val/test RWPE also reflects edges later than the
+  seed edge — the same caveat as neighbour sampling.
 
 ## 4. Evaluation protocol — never deviate
 
@@ -160,7 +185,9 @@ without an explicit request. Known invariants:
 - **Temporal 60/20/20 positional split**, boundaries fixed *before* feature engineering.
   Train 3,046,342 · val 1,015,447 · test 1,015,448 edges. Cumulative PyG snapshots
   (`train_graph.pt`, `val_graph.pt`, `test_graph.pt`); context edges carry label −1.
-- **EDGE_DIM 81** = 20 baseline (`[:, :20]`) + 61 GFP (`[:, 20:81]`). **NODE_DIM 6.**
+- **EDGE_DIM 81** = 20 baseline (`[:, :20]`) + 61 GFP (`[:, 20:81]`). **NODE_DIM 6** (+ k
+  when `NODE_ENC = rwpe<k>`; the RWPE files in `Data/rwpe/` are appended at run time, the
+  graph files never change).
 - **GFP is causal:** computed by streaming time-sorted edges through `transform` in batches
   of 128 (`run_gfp_wsl.py`, runs in WSL because Windows snapml lacks GFP). Single-batch
   `fit_transform` leaks the future — never use it.
@@ -219,6 +246,10 @@ mirror both to their Notion pages. Mark superseded rows `SUPERSEDED`, never dele
   `core.in_degree_histogram(graphs['train'])`, which `PNAConv` needs; all other notebooks omit
   it. Why: the other operators ignore the histogram, and `run_experiment()` computes it itself
   for PNA, so the argument would be dead code there and would mean editing executed notebooks.
+  Second exception: `RWPE_fixed_architecture.ipynb` runs node-encoding configs for any
+  operator (one operator per Kaggle session), so its config entries carry `operator` and
+  `node_enc`, its runs land in that operator's `Outputs/<FAMILY>/`, and its summary is
+  `batch_summary_rwpe.csv` so the family's own `batch_summary.csv` is never overwritten.
 - **Kaggle environment cell — keep verbatim in every operator notebook.** The pinned
   PyTorch / PyG stack below is known to work on Kaggle GPU; do not "simplify", reorder, or
   change versions without my OK (a mismatched torch / torch-scatter build is the usual cause of

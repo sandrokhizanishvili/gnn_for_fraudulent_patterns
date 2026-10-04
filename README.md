@@ -18,11 +18,17 @@ Full write-up of the work so far: **[Progress_Report.md](Progress_Report.md)**.
 | `GAT_fixed_architecture.ipynb` | Kaggle (GPU) | Same notebook for the GATv2 operator (4 heads × 32 = 128, edge features via `edge_dim`); only the config cell differs — everything shared is imported from `gnn_core.py` |
 | `PNA_fixed_architecture.ipynb` | Kaggle (GPU) | Same notebook for the PNA operator (mean / max / min / std aggregators × degree scalers calibrated on the training-graph in-degree histogram, edge features via `edge_dim`); only the config cell differs |
 | `TRANSFORMER_fixed_architecture.ipynb` | Kaggle (GPU) | Same notebook for the graph transformer operator (PyG `TransformerConv`, 4 heads × 32 = 128, attention with edge features via `edge_dim` over the sampled neighbourhood — local, not full-graph); only the config cell differs |
+| `RWPE_encoding.ipynb` | `graph_feature_preprocessor` (CPU; also runs on Kaggle) | Random-walk positional encoding (RWPE) per snapshot, k = 8 and 16: toy sanity test against PyG `AddRandomWalkPE`, edge-list check against the graph files, self-loop tables (why self-loops are dropped from P), compute via `rwpe_compute.py` with a per-step time / RAM / fill-in log, checks, diagnostics, value scale → `Data/rwpe/` |
+| `RWPE_fixed_architecture.ipynb` | Kaggle (GPU) | Same notebook for the node-encoding runs (`NODE_ENC = rwpe16` on configs 5 and 4 of every operator; one operator per session); RWPE files from the Kaggle dataset `hi-small-rwpe`; summary `batch_summary_rwpe.csv` |
 
 `gnn_core.py` — everything shared by the operator notebooks: the fixed model template,
 `build_model(operator, …)`, loaders, the training loop with validation threshold sweep, metrics on
 train / val / test, curves, saving and `invariant_params()`. Notebooks only set the operator, the
-config batch and paths.
+config batch and paths. The `NODE_ENC` knob (`none | rwpe8 | rwpe16`) appends a pre-computed node
+encoding to the 6 entity columns; only `node_proj` widens.
+
+`rwpe_compute.py` — exact RWPE of one snapshot on CPU (scipy; P = D_out⁻¹ A without self-loops,
+step k = diag(Pᵏ), same maths as PyG `AddRandomWalkPE`), logging non-zeros, seconds and RAM per step.
 
 `run_gfp_wsl.py` — helper that runs IBM SnapML's Graph Feature Preprocessor **inside WSL**
 (the Windows snapml build lacks it), streaming edges in batches of 128 so features stay causal.
@@ -30,7 +36,7 @@ Requires a WSL venv: `python3 -m venv ~/gfp_env && ~/gfp_env/bin/pip install 'nu
 
 ## Graph
 
-- **Nodes** = accounts (515,070 after truncation), **edges** = transactions (5,077,237 after truncation), directed temporal multigraph, self-loops kept and flagged.
+- **Nodes** = accounts (515,070 after truncation), **edges** = transactions (5,077,237 after truncation), directed temporal multigraph. The 590,819 self-loops (11.6 % of edges, 8 laundering) are kept as edges and flagged by `Is_Self_Loop`.
 - **Task** = edge classification (`Is Laundering`), 4,522 positives (0.089%).
 - **Node features (6):** entity-type one-hot.
 - **Edge features (81):** 20 baseline (USD log-amount, structuring band, time cyclicals, same-bank, time since previous txn of sender/receiver, causal leakage-guarded bank target encoding, payment-format OHE) + 61 GFP (scatter-gather, temporal & simple cycles, vertex statistics).
@@ -39,7 +45,8 @@ Requires a WSL venv: `python3 -m venv ~/gfp_env && ~/gfp_env/bin/pip install 'nu
 ## Outputs (`Data/`, not versioned — regenerate with the notebooks)
 
 `edge_features.csv` · `node_features.csv` · `feature_meta.json` (feature groups, dims, ablation grid) ·
-`standard_scaler.pkl` · `train/val/test_graph.pt` · `account_to_idx.pkl` · `gfp_variants/*.npy`
+`standard_scaler.pkl` · `train/val/test_graph.pt` · `account_to_idx.pkl` · `gfp_variants/*.npy` ·
+`rwpe/rwpe_k{8,16}_{train,val,test}.pt` (RWPE node encodings, float32 [515,070, k])
 
 ## Model comparison
 
@@ -49,6 +56,8 @@ seven feature configurations: which edge features enter message passing (none / 
 81 baseline+GFP) × which the classifier sees (baseline / baseline+GFP / GFP only). Headline
 metric minority-class F1 at a validation-chosen threshold, with PR-AUC and top-5 % recall;
 every metric on train, val and test. Results per family in `Outputs/<FAMILY>/` and in
-[Progress_Report.md](Progress_Report.md) §7.1–7.4 (best test F1: GIN 0.525, GATv2 0.500 — both
-with baseline features in message passing + all 81 features at the readout; PNA 0.617 and graph
-transformer 0.602, each a tie between baseline features in message passing with or without GFP).
+[Progress_Report.md](Progress_Report.md) §7.1–7.4. Winners are chosen on validation F1 (gaps
+under 0.02 are ties; test is shown, never used to choose): GIN-5; GAT-4 ≈ GAT-5; PNA-2 ≈ PNA-4 ≈
+PNA-5; TR-4 ≈ TR-5 — in every family, baseline features in message passing with all 81 features
+at the readout is among the best (test F1 0.49–0.53 for GIN and GATv2, 0.59–0.62 for PNA and the
+graph transformer). Next: the same configurations with the RWPE node encoding (§7.5).

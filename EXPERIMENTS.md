@@ -18,13 +18,16 @@ Mirrored on the Notion experiments page (kept in sync).
 ## Now
 
 - [x] GIN batch (GIN-1 … GIN-7) trained under the full evaluation protocol — Kaggle, 26 Sep;
-      results in `Progress_Report.md` §7.1 (winner GIN-5, test F1 0.525)
+      results in `Progress_Report.md` §7.1 (best by validation F1: GIN-5)
 - [x] PNA batch (PNA-1 … PNA-7) trained under the same protocol — Kaggle, 27 Sep;
-      results in `Progress_Report.md` §7.3 (winner PNA-4, test F1 0.617; tie with PNA-2 and PNA-5)
+      results in `Progress_Report.md` §7.3 (best by validation F1: PNA-2 ≈ PNA-4 ≈ PNA-5, a tie)
 - [x] GATv2 batch (GAT-1 … GAT-7) trained under the same protocol — Kaggle, 26 Sep;
-      results in `Progress_Report.md` §7.2 (winner GAT-5, test F1 0.500)
+      results in `Progress_Report.md` §7.2 (best by validation F1: GAT-4 ≈ GAT-5, a tie)
 - [x] Graph Transformer batch (TR-1 … TR-7) trained under the same protocol — Kaggle, 28 Sep;
-      results in `Progress_Report.md` §7.4 (winner TR-4, test F1 0.602; tie with TR-2 and TR-5)
+      results in `Progress_Report.md` §7.4 (best by validation F1: TR-4 ≈ TR-5, a tie; TR-2 at the edge)
+- [ ] RWPE node encoding (k = 16): files computed (`RWPE_encoding.ipynb` → `Data/rwpe/`),
+      `NODE_ENC` knob in `gnn_core.py`, `RWPE_fixed_architecture.ipynb` ready — the 8 stage-1
+      runs of section 3 "RWPE runs" wait for Kaggle
 
 ---
 
@@ -41,9 +44,17 @@ laundering). Each transaction is an edge, each account a node.
 - [ ] **GFP with data-tuned windows** — four alternative settings (longer windows, longer cycles
       — lc10 is the paper's exact cycle length —, extra statistics) are computed; retrain the best
       model with each to see if they beat V0
-- [ ] **RWPE node encoding** (8 per account) — random-walk return probabilities that tell the
-      network where an account sits in the graph; retrain the best model per operator with it
-- [ ] **Node2Vec node encoding** (8 per account) — learned alternative to RWPE, if time allows
+- [ ] **RWPE node encoding** (16 per account, k = 16 first) — directed random-walk return
+      probabilities (walks follow the money: non-zero = the account sits on a directed money
+      cycle of length ≤ 16); one vector per snapshot from
+      that snapshot's own edges, self-loops dropped (they are 18 % of train edges but 2 % of
+      val/test, and `Is_Self_Loop` / `PayFmt_Reinvestment` already carry them);
+      `RWPE_encoding.ipynb` → `Data/rwpe/`. Runs: configs 5 and 4 of every operator with RWPE
+      (section 3, "RWPE runs"). Rule, on validation F1 only (gap < 0.02 = tie): k = 8 runs only
+      if k = 16 shows an uplift (> 0.02 validation F1 over the matching run without RWPE); then
+      keep k = 8 if it ties with k = 16, otherwise keep k = 16. No uplift at k = 16 → stop,
+      RWPE is a null result. Test is never used to choose.
+- [ ] **Node2Vec node encoding** (dim = the RWPE k kept) — learned alternative to RWPE, if time allows
 
 ---
 
@@ -113,6 +124,22 @@ passing / which the final classifier sees. "base" = 20 baseline, "base+GFP" = al
 - [x] **TR-6** · base / GFP only → `Outputs/TRANSFORMER/transformer_mp-base_readout-gfp_dir-in/`
 - [x] **TR-7** · none / GFP only → `Outputs/TRANSFORMER/transformer_mp-none_readout-gfp_dir-in/`
 
+### RWPE runs — node encoding (`RWPE_fixed_architecture.ipynb`, one operator per Kaggle session)
+
+*Config 5 (base / base+GFP) and config 4 (base+GFP / base+GFP) of each family with the k = 16
+RWPE node encoding (`NODE_ENC = rwpe16`); each compared with the family's own config 5 / 4 above
+on validation F1. Summary file: `Outputs/<FAMILY>/batch_summary_rwpe.csv`.*
+
+- [ ] **GIN-5 + RWPE** · base / base+GFP · rwpe16 → `Outputs/GIN/gin_mp-base_readout-full_dir-in_enc-rwpe16/`
+- [ ] **GIN-4 + RWPE** · base+GFP / base+GFP · rwpe16 → `Outputs/GIN/gin_mp-full_readout-full_dir-in_enc-rwpe16/`
+- [ ] **GAT-5 + RWPE** · base / base+GFP · rwpe16 → `Outputs/GAT/gat_mp-base_readout-full_dir-in_enc-rwpe16/`
+- [ ] **GAT-4 + RWPE** · base+GFP / base+GFP · rwpe16 → `Outputs/GAT/gat_mp-full_readout-full_dir-in_enc-rwpe16/`
+- [ ] **PNA-5 + RWPE** · base / base+GFP · rwpe16 → `Outputs/PNA/pna_mp-base_readout-full_dir-in_enc-rwpe16/`
+- [ ] **PNA-4 + RWPE** · base+GFP / base+GFP · rwpe16 → `Outputs/PNA/pna_mp-full_readout-full_dir-in_enc-rwpe16/`
+- [ ] **TR-5 + RWPE** · base / base+GFP · rwpe16 → `Outputs/TRANSFORMER/transformer_mp-base_readout-full_dir-in_enc-rwpe16/`
+- [ ] **TR-4 + RWPE** · base+GFP / base+GFP · rwpe16 → `Outputs/TRANSFORMER/transformer_mp-full_readout-full_dir-in_enc-rwpe16/`
+- [ ] **k = 8 runs** (`rwpe8`, same configs) — only if k = 16 shows an uplift (rule in section 1)
+
 ### Cross-checks (optional)
 
 - [ ] **Gradient-boosted trees** on the same features, no graph — does message passing add
@@ -139,6 +166,10 @@ passing / which the final classifier sees. "base" = 20 baseline, "base+GFP" = al
 
 *Newest first. Unticked = in progress · ticked = finished and synced.*
 
+- [ ] **4 Oct** — RWPE node encoding: `rwpe_compute.py` + `RWPE_encoding.ipynb` (k = 8 and
+      k = 16 per snapshot, self-loops dropped, checked against PyG `AddRandomWalkPE`,
+      `Data/rwpe/`); `NODE_ENC` knob in `gnn_core.py` (only `node_proj` widens);
+      `RWPE_fixed_architecture.ipynb` ready with the 8 stage-1 configs, batch not yet run
 - [x] **28 Sep** — Graph Transformer batch (TR-1 … TR-7) trained on Kaggle under the full
       evaluation protocol; results, curves and predictions in `Outputs/TRANSFORMER/`, table in
       `Progress_Report.md` §7.4
@@ -170,7 +201,7 @@ passing / which the final classifier sees. "base" = 20 baseline, "base+GFP" = al
 
 **Knobs** (the only things that change between runs): `OPERATOR` (gin | pna | gat | transformer) ·
 `MP_EDGE_FEATS` (none | base | full) · `READOUT_EDGE_FEATS` (base | full | gfp) ·
-`NODE_ENC` (none | rwpe | node2vec) · `GFP_VARIANT` (v0 | win48 | win120 | lc10 | rich) ·
+`NODE_ENC` (none | rwpe8 | rwpe16 | node2vec) · `GFP_VARIANT` (v0 | win48 | win120 | lc10 | rich) ·
 `MP_DIRECTION` (in | bidirectional) · `TEMPORAL_SAMPLING` (on | off).
 
 **Config order per family** (`CONFIGS` in every operator notebook, in this order):
@@ -185,14 +216,22 @@ passing / which the final classifier sees. "base" = 20 baseline, "base+GFP" = al
 | 6 | base | gfp |
 | 7 | none | gfp |
 
-**Fixed sizes for the planned extensions** (chosen a priori, never tuned): RWPE k = 8 (covers
-the GFP cycle limit of 6 with margin; matches the course project); Node2Vec dim = 8 (matched to
-RWPE so the comparison is about the kind of encoding, trained on the train graph only, zero
-vector for unseen accounts); Transformer = PyG `TransformerConv`, 4 heads × 32 = 128 (mirrors
-GATv2 so only the attention mechanism differs; local attention over the sampled `[100, 100]`
-neighbourhood). GFP variants are swapped into `edge_attr[:, 20:81]` after the same train-fit
-normalisation. RWPE on the val/test snapshots sees later edges than a seed edge — same caveat
-as neighbour sampling; reported as a limitation.
+RWPE runs use the same `mp` / `readout` dicts plus `operator` and `node_enc = 'rwpe16'`
+(configs 5 and 4); the run name adds `_enc-rwpe16`; the summary is `batch_summary_rwpe.csv`.
+
+**Fixed sizes for the planned extensions** (chosen a priori, never tuned): RWPE k = 16 first
+(steps 1–16; covers the GFP cycle limit of 6 and the paper's 10 with margin), k = 8 (the course
+project's value, = steps 1–8 of k = 16) only by the rule in section 1; P is built without
+self-loops, so step 1 is 0 for every account; Node2Vec dim = the RWPE k kept (matched so the
+comparison is about the kind of encoding, trained on the train graph only, zero vector for
+unseen accounts); Transformer = PyG `TransformerConv`, 4 heads × 32 = 128 (mirrors GATv2 so only
+the attention mechanism differs; local attention over the sampled `[100, 100]` neighbourhood).
+GFP variants are swapped into `edge_attr[:, 20:81]` after the same train-fit normalisation.
+RWPE on the val/test snapshots sees later edges than a seed edge — same caveat as neighbour
+sampling; reported as a limitation. RWPE files: `Data/rwpe/rwpe_k{8,16}_{train,val,test}.pt`,
+float32 [515,070, k], rows in `account_to_idx` order, computed by `rwpe_compute.py` (scipy,
+exact, same maths as PyG `AddRandomWalkPE`: P = D_out⁻¹ A, multi-edges counted, never-senders
+stay 0); on Kaggle they come from the separate dataset `hi-small-rwpe`.
 
 **Protocol, architecture, artifacts and standing rules:** see `CLAUDE.md` §3–§6. Nothing is
 "done" until results are pushed and this file, `Progress_Report.md` and both Notion pages agree.

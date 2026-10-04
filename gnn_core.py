@@ -2,6 +2,8 @@
 
 Everything that must be identical across operators lives here and is imported by the
 operator notebooks, which only set OPERATOR, the batch of knob configs and paths.
+Knobs handled here: mp / readout edge columns, MP_DIRECTION, TEMPORAL_SAMPLING and NODE_ENC
+(none | rwpe8 | rwpe16: pre-computed node encodings appended to the 6 entity columns).
 '''
 import gc
 import json
@@ -37,7 +39,9 @@ WEIGHT_DECAY  = 1e-5           # Adam L2 term; every run since the first batch u
 POS_WEIGHT    = 8.0            # weight of the laundering class in the loss
 SEED          = 42
 
-OPERATORS   = ('gin', 'pna', 'gat', 'transformer')
+OPERATORS     = ('gin', 'pna', 'gat', 'transformer')
+NODE_ENCS     = ('none', 'rwpe8', 'rwpe16')   # NODE_ENC knob: node encoding appended to the entity one-hots
+BASE_NODE_DIM = 6                             # the entity one-hots every run has; encodings come after them
 SPLITS      = ('train', 'val', 'test')
 METRICS     = ('f1', 'precision', 'recall', 'pr_auc', 'roc_auc', 'precision_at_5pct', 'recall_at_5pct')
 RUN_FIELDS  = ('threshold', 'best_epoch', 'params', 'invariant_params')
@@ -82,6 +86,29 @@ def load_graphs(data_dir):
         print(f'{split:<5} nodes={g.num_nodes:,} edges={g.edge_index.shape[1]:,} '
               f'evaluated={n_eval:,} laundering={n_pos:,} ({n_pos / n_eval:.4%})')
     return graphs, col_sets, node_dim
+
+
+def set_node_encoding(graphs, node_enc, enc_dir=None):
+    '''Set graph.x of every snapshot to [entity one-hots || node encoding] for the NODE_ENC knob.
+
+    none -> the 6 entity columns only (as every run so far); rwpe<k> -> that snapshot's k RWPE
+    columns from <enc_dir>/rwpe_k<k>_<split>.pt appended. Returns the node dim (6 or 6 + k).
+    '''
+    assert node_enc in NODE_ENCS, f'unknown node encoding {node_enc!r}; choose from {NODE_ENCS}'
+    for split, graph in graphs.items():
+        if 'x_base' not in graph:
+            graph.x_base = graph.x        # remembered once, so the knob can change between runs of a batch
+        if node_enc == 'none':
+            graph.x = graph.x_base
+            continue
+        k = int(node_enc[len('rwpe'):])
+        enc = torch.load(f'{enc_dir}/rwpe_k{k}_{split}.pt', weights_only=True).float()
+        assert enc.shape == (graph.num_nodes, k), f'{split}: encoding {tuple(enc.shape)} != ({graph.num_nodes}, {k})'
+        assert not torch.isnan(enc).any() and enc.min() >= 0 and enc.max() <= 1
+        graph.x = torch.cat([graph.x_base, enc], dim=1)
+    node_dim = graphs['train'].x.shape[1]
+    assert all(g.x.shape[1] == node_dim for g in graphs.values())
+    return node_dim
 
 
 def in_degree_histogram(graph):
@@ -215,6 +242,8 @@ def count_params(model):
 def invariant_params(model):
     '''Parameters whose shape does not depend on the edge-feature widths.
 
+    node_proj.weight is counted at its base width (HIDDEN x BASE_NODE_DIM): a node encoding
+    (NODE_ENC) only widens it, exactly like edge features widen the edge projections.
     67,587 for the GIN family, 67,585 for the GATv2 family (lin_l / lin_r / att / bias count,
     lin_edge does not), 427,265 for the PNA family (its message MLP input widens from 2 x 128
     to 3 x 128 once edge features enter, so its first Linear pre_nns.0.0 is counted with the
@@ -228,7 +257,9 @@ def invariant_params(model):
     width_dependent = ('.lin.', 'lin_edge', 'edge_encoder', 'pre_nns.0.0.', 'classifier.0.')
     total = 0
     for name, p in model.named_parameters():
-        if not any(tag in name for tag in width_dependent):
+        if name == 'node_proj.weight':
+            total += HIDDEN * BASE_NODE_DIM   # the entity columns only; encoding columns are width-dependent
+        elif not any(tag in name for tag in width_dependent):
             total += p.numel()
     return total
 
@@ -477,19 +508,21 @@ def plot_curves(history, y_test, p_test, test_pr_auc, best_epoch, run_name, path
     plt.close(fig)
 
 
-def run_name(operator, cfg, mp_direction='in', temporal=False):
-    '''<model>_mp-<mp>_readout-<ro>_dir-<dir>[_temporal] (CLAUDE.md §6).'''
+def run_name(operator, cfg, mp_direction='in', temporal=False, node_enc='none'):
+    '''<model>_mp-<mp>_readout-<ro>_dir-<dir>[_enc-<enc>][_temporal] (CLAUDE.md §6).'''
     name = f"{operator}_mp-{cfg['mp']}_readout-{cfg['readout']}_dir-{mp_direction}"
+    if node_enc != 'none':
+        name += f'_enc-{node_enc}'
     if temporal:
         name += '_temporal'
     return name
 
 
 def result_row(name, operator, cfg, mp_direction, temporal, best_epoch, threshold,
-               n_params, n_invariant, metrics):
+               n_params, n_invariant, metrics, node_enc='none'):
     '''The flat result row shared by results.json and batch_summary.csv.'''
     row = {'run': name, 'operator': operator, 'mp': cfg['mp'], 'readout': cfg['readout'],
-           'mp_direction': mp_direction, 'temporal_sampling': temporal, 'seed': SEED,
+           'mp_direction': mp_direction, 'temporal_sampling': temporal, 'node_enc': node_enc, 'seed': SEED,
            'best_epoch': best_epoch, 'threshold': threshold,
            'params': n_params, 'invariant_params': n_invariant}
     row.update(flatten_metrics(metrics))
@@ -506,10 +539,10 @@ def save_run(out_dir, row):
     print(pd.DataFrame(table).round(4))
 
 
-def print_model_header(name, mp_idx, readout_idx, n_params, n_invariant):
+def print_model_header(name, mp_idx, readout_idx, n_params, n_invariant, node_dim=BASE_NODE_DIM):
     '''One-line description of the run and its parameter fingerprint.'''
     print(f'=== {name} ===')
-    print(f'MP edge features: {len(mp_idx)} | readout edge features: {len(readout_idx)}')
+    print(f'MP edge features: {len(mp_idx)} | readout edge features: {len(readout_idx)} | node features: {node_dim}')
     print(f'total params: {n_params:,} | architecture-invariant: {n_invariant:,}')
 
 
@@ -517,19 +550,25 @@ def print_model_header(name, mp_idx, readout_idx, n_params, n_invariant):
 # one run, one re-score, one batch summary
 # ==================================================================================================
 
-def run_experiment(operator, cfg, graphs, col_sets, node_dim, out_root, mp_direction='in', temporal=False):
-    '''Train and evaluate one knob configuration end-to-end; returns the flat result row.'''
-    name = run_name(operator, cfg, mp_direction, temporal)
+def run_experiment(operator, cfg, graphs, col_sets, node_dim, out_root, mp_direction='in', temporal=False,
+                   node_enc='none', enc_dir=None):
+    '''Train and evaluate one knob configuration end-to-end; returns the flat result row.
+
+    node_enc = 'none' leaves graph.x and node_dim as loaded; 'rwpe<k>' appends the k RWPE columns
+    from enc_dir, so only node_proj widens (6 + k -> 128).
+    '''
+    name = run_name(operator, cfg, mp_direction, temporal, node_enc)
     out_dir = f'{out_root}/{name}'
     os.makedirs(out_dir, exist_ok=True)
     mp_idx, readout_idx = col_sets[cfg['mp']], col_sets[cfg['readout']]
+    node_dim = set_node_encoding(graphs, node_enc, enc_dir)   # 6 for 'none', 6 + k for 'rwpe<k>'
 
     set_seed(SEED)
     deg_hist = in_degree_histogram(graphs['train']) if operator == 'pna' else None
     model = build_model(operator, node_dim, len(mp_idx), len(readout_idx),
                         mp_direction == 'bidirectional', deg_hist)
     n_params, n_invariant = count_params(model), invariant_params(model)
-    print_model_header(name, mp_idx, readout_idx, n_params, n_invariant)
+    print_model_header(name, mp_idx, readout_idx, n_params, n_invariant, node_dim)
 
     loaders = make_loaders(graphs, mp_idx, readout_idx, temporal)
     history, best_epoch, threshold = train_one_run(model, loaders, out_dir)
@@ -538,7 +577,7 @@ def run_experiment(operator, cfg, graphs, col_sets, node_dim, out_root, mp_direc
     model.load_state_dict(torch.load(f'{out_dir}/best.pt', map_location=device))
     metrics, preds = score_all_splits(model, loaders, graphs, threshold)
     row = result_row(name, operator, cfg, mp_direction, temporal, best_epoch, threshold,
-                     n_params, n_invariant, metrics)
+                     n_params, n_invariant, metrics, node_enc)
     save_run(out_dir, row)
     save_predictions(out_dir, graphs, preds, threshold)
     plot_curves(history, preds['test']['y'], preds['test']['prob'], metrics['test']['pr_auc'],
@@ -592,14 +631,14 @@ def run_experiment(operator, cfg, graphs, col_sets, node_dim, out_root, mp_direc
 #     return row
 
 
-def summarize_batch(rows, out_root):
-    '''Write batch_summary.csv; check every §4 column is present and invariant_params is identical.'''
+def summarize_batch(rows, out_root, filename='batch_summary.csv'):
+    '''Write the batch summary CSV; check every §4 column is present and invariant_params is identical.'''
     summary = pd.DataFrame(rows)
     missing = [c for c in METRIC_COLS + list(RUN_FIELDS) if c not in summary.columns]
     assert not missing, f'batch_summary.csv is missing columns: {missing}'
     assert summary['invariant_params'].nunique() == 1, \
         f"invariant_params differ across runs: {summary['invariant_params'].tolist()}"
-    summary.to_csv(f'{out_root}/batch_summary.csv', index=False)
-    print(f'{len(summary)} runs -> {out_root}/batch_summary.csv | invariant_params = '
+    summary.to_csv(f'{out_root}/{filename}', index=False)
+    print(f'{len(summary)} runs -> {out_root}/{filename} | invariant_params = '
           f"{int(summary['invariant_params'].iloc[0]):,} in every row")
     return summary
