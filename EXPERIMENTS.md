@@ -170,7 +170,8 @@ on validation F1. Summary file: `Outputs/RWPE/<FAMILY>/batch_summary_rwpe.csv`; 
 - [ ] **4 Oct** — GFP `tuned` sheet (64 columns) computed in a rewritten `GFP_experiments.ipynb`;
       the four single-factor sheets of August (win48 / win120 / lc10 / rich) removed as
       uninformative; the "52 % / 84 % of hop gaps" claim did not reproduce and was replaced by the
-      recomputed per-typology durations (`Progress_Report.md` §3); V0 relabelled "paper, cycles ≤ 6"
+      recomputed per-typology durations (`Progress_Report.md` §3); V0 relabelled "paper, cycles ≤ 6";
+      `Data_checks.ipynb` §6 now checks the tuned sheet (59 checks, all pass)
 - [ ] **4 Oct** — RWPE node encoding: `rwpe_compute.py` + `RWPE_encoding.ipynb` (k = 8 and
       k = 16 per snapshot, self-loops dropped, checked against PyG `AddRandomWalkPE`,
       `Data/rwpe/`); `NODE_ENC` knob in `gnn_core.py` (only `node_proj` widens);

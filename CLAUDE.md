@@ -179,7 +179,7 @@ them here. Rules that apply when implementing:
 
 ## 5. Data pipeline & leakage — treat as settled, protect it
 
-The pipeline is complete and verified (61 checks in `Data_checks.ipynb`). Do not "improve" it
+The pipeline is complete and verified (59 checks in `Data_checks.ipynb`). Do not "improve" it
 without an explicit request. Known invariants:
 
 - **Temporal 60/20/20 positional split**, boundaries fixed *before* feature engineering.

@@ -134,7 +134,13 @@ what matters is how long a whole attempt lasts.
 | Hop gap along chains (cycles + random walks) | median 8.5 h; ≤ 24 h: 83 %, ≤ 48 h: 96 % | 83 % of hops | 96 % |
 
 120 h would cover every annotated ring, fan and scatter-gather; it was not computed (cost, and
-noise from coincidental long patterns) and is the follow-up if tuned helps. Next step: retrain
+noise from coincidental long patterns) and is the follow-up if tuned helps.
+
+**What the tuned sheet shows before any training** (`GFP_experiments.ipynb` §6–7): same
+causality as V0 (99.02 % of first-ever transactions see only themselves, worst case degree 9);
+row by row every tuned count is ≥ V0's (rows aligned; 3 of 5 M temporal-cycle rows differ, a
+snapml search quirk); the strongest label correlation rises from +0.064 (V0, 2–3-hop cycles) to
++0.088 (tuned, 4–6-hop cycles); scatter-gather columns stay at ≈ 0 in both. Next step: retrain
 config 5 of GIN and PNA with tuned, nothing else changed.
 
 **Two snapml pitfalls, found by our checks and fixed:**
@@ -961,8 +967,8 @@ notebook holds every training log; outputs in `Outputs/RWPE/<FAMILY>/<run>_enc-r
 |---|---|
 | `EDA.ipynb` | exploratory analysis, USD conversion, findings behind the feature design |
 | `Data_preparation.ipynb` | truncation, features, GFP, split, normalization, graph snapshots |
-| `GFP_experiments.ipynb` | the four GFP parameter variants + rationale |
-| `Data_checks.ipynb` | 61 verification checks over every artifact |
+| `GFP_experiments.ipynb` | the data-tuned GFP sheet `tuned` next to V0: evidence from the 370 annotated attempts, parameters, WSL run, causality / alignment checks, label correlations |
+| `Data_checks.ipynb` | 59 verification checks over every artifact (incl. the tuned sheet) |
 | `gnn_core.py` | shared code for every operator: fixed model template, `build_model(operator, …)`, loaders, training loop with validation threshold sweep, metrics on all splits, curves, saving, `invariant_params()` |
 | `GIN_fixed_architecture.ipynb` | the Kaggle notebook of the GIN family: config cell (7 runs) + loop over `gnn_core.py`; `GAT_fixed_architecture.ipynb` is the same notebook for GATv2 (only the config cell differs) |
 | `PNA_fixed_architecture.ipynb` / `TRANSFORMER_fixed_architecture.ipynb` | the same notebook for PNA and for the graph transformer (only the config cell differs); results in §7.3 and §7.4 |
