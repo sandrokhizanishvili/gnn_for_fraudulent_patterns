@@ -61,15 +61,21 @@ uses only the past or the training window; GFP causality is handled in §3; test
 ## 3 · GFP configuration & variants
 
 IBM's Graph Feature Preprocessor turns each transaction's graph neighbourhood into numbers,
-computed causally in batches of 128 (see the pitfalls below). **V0** is the paper's configuration and feeds every
-result so far; the four variants are computed (`Data/gfp_variants/`) but not yet trained on.
-"= V0" means unchanged.
+computed causally in batches of 128 (see the pitfalls below). **V0** follows the paper's configuration
+(Altman et al. 2023, Appendix D) with one deliberate change: simple cycles are capped at length 6
+instead of the paper's 10, to keep GFP tractable on 5 M edges. The paper's exact setting is the
+**lc10** variant. V0 feeds every result so far; the four variants are computed
+(`Data/gfp_variants/`) but not yet trained on. "= V0" means unchanged.
 
-| Feature group | What it measures for each transaction | V0 (paper) | win48 | win120 | lc10 | rich |
+What the paper fixes: batch size 128, 6 h window for scatter-gather, 24 h for everything else,
+simple cycles up to length 10, vertex statistics on amount and timestamp. What it leaves open
+(our choice): histogram bins [2, 3, 5] and snapml's default eight statistics (no min / max / median).
+
+| Feature group | What it measures for each transaction | V0 (paper, cycles ≤ 6) | win48 | win120 | lc10 | rich |
 |---|---|---|---|---|---|---|
 | Scatter-gather (3 bins) | gather-then-scatter patterns the transaction belongs to, counted by pattern size [2–3, 3–5, 5+] | window 6 h | 12 h | 24 h | = V0 | = V0 |
 | Temporal cycles (3 bins) | time-ordered cycles the transaction closes, by cycle length [2–3, 3–5, 5+] | window 24 h | 48 h | 120 h | = V0 | = V0 |
-| Simple cycles (3 bins) | length-limited cycles the transaction closes, by cycle length | window 24 h, length ≤ 6 | 48 h | 120 h | length ≤ 10 | = V0 |
+| Simple cycles (3 bins) | length-limited cycles the transaction closes, by cycle length | window 24 h, length ≤ 6 | 48 h | 120 h | length ≤ 10 (= paper) | = V0 |
 | Vertex statistics (52) | for sender and receiver, incoming and outgoing: fan, degree, ratio, and avg / sum / var / skew / kurtosis of the timestamps and amounts (2 × 2 × 13) | window 24 h | 48 h | 120 h | = V0 | + min / max / median → 2 × 2 × 19 = 76 |
 | Fan / degree histograms | number of counterparties (fan) and of transactions (degree) of the accounts, in and out, by bin | off | off | off | off | on, bins [2, 4, 8, 13], 24 h → 16 |
 | Graph memory (`time_window`) | how far back edges stay in snapml's graph; caps every window above it | 24 h | 48 h | 120 h | 24 h | 24 h |
@@ -77,7 +83,8 @@ result so far; the four variants are computed (`Data/gfp_variants/`) but not yet
 
 **Why the variants:** HI-Small's 370 laundering attempts are slower than the paper's windows —
 21 % finish within 24 h, 37 % of cycles exceed 6 hops. win48 covers 84 % of hop-to-hop gaps
-(V0: 52 %), win120 covers 90 % of attempt durations, lc10 covers 49 of 54 observed cycles, rich
+(V0: 52 %), win120 covers 90 % of attempt durations, lc10 (the paper's cycle length) covers 49 of
+54 observed cycles, rich
 takes its bins from the data's fan-degree quartiles. Longer windows already correlate more with
 the label (cycle features +0.064 → +0.097). Next step: retrain the best model with each variant,
 nothing else changed.

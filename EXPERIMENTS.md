@@ -36,11 +36,11 @@ laundering). Each transaction is an edge, each account a node.
 - [x] **Baseline edge features** (20 per transaction) — amount, timing, bank, payment format
 - [x] **GFP structural edge features** (61 per transaction) — pre-computed graph patterns around
       the transaction (cycles, fan-in/out, scatter-gather, degree statistics), IBM's Graph Feature
-      Preprocessor with the paper's default windows
+      Preprocessor with the paper's windows; simple cycles capped at length 6 (paper: 10)
 - [x] **Node features** (6 per account) — account entity type
-- [ ] **GFP with data-tuned windows** — four alternative settings (longer windows, longer cycles,
-      extra statistics) are computed; retrain the best model with each to see if they beat the
-      paper's defaults
+- [ ] **GFP with data-tuned windows** — four alternative settings (longer windows, longer cycles
+      — lc10 is the paper's exact cycle length —, extra statistics) are computed; retrain the best
+      model with each to see if they beat V0
 - [ ] **RWPE node encoding** (8 per account) — random-walk return probabilities that tell the
       network where an account sits in the graph; retrain the best model per operator with it
 - [ ] **Node2Vec node encoding** (8 per account) — learned alternative to RWPE, if time allows
