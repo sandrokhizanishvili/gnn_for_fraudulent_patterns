@@ -20,12 +20,15 @@ Full write-up of the work so far: **[Progress_Report.md](Progress_Report.md)**.
 | `TRANSFORMER_fixed_architecture.ipynb` | Kaggle (GPU) | Same notebook for the graph transformer operator (PyG `TransformerConv`, 4 heads × 32 = 128, attention with edge features via `edge_dim` over the sampled neighbourhood — local, not full-graph); only the config cell differs |
 | `RWPE_encoding.ipynb` | `graph_feature_preprocessor` (CPU; also runs on Kaggle) | Random-walk positional encoding (RWPE) per snapshot, k = 8 and 16: toy sanity test against PyG `AddRandomWalkPE`, edge-list check against the graph files, self-loop tables (why self-loops are dropped from P), compute via `rwpe_compute.py` with a per-step time / RAM / fill-in log, checks, diagnostics, value scale → `Data/rwpe/` |
 | `RWPE_fixed_architecture.ipynb` | Kaggle (GPU) | Same notebook for the node-encoding runs (`NODE_ENC = rwpe16` on configs 5 and 4 of every operator, all eight in one session); RWPE files from the Kaggle dataset `hi-small-rwpe`; results in `Outputs/RWPE/<FAMILY>/`, summary `batch_summary_rwpe.csv` per family |
+| `GFP_fixed_architecture.ipynb` | Kaggle (GPU) | Same notebook for the data-tuned GFP runs (`GFP_VARIANT = tuned` on configs 5 and 4 of every operator, all eight in one session); the tuned sheet from the Kaggle dataset `hi-small-gfp-tuned`, swapped into the GFP block at load time (graph files untouched); results in `Outputs/GFP_TUNED/<FAMILY>/`, summary `batch_summary_gfp_tuned.csv` per family |
 
 `gnn_core.py` — everything shared by the operator notebooks: the fixed model template,
 `build_model(operator, …)`, loaders, the training loop with validation threshold sweep, metrics on
 train / val / test, curves, saving and `invariant_params()`. Notebooks only set the operator, the
 config batch and paths. The `NODE_ENC` knob (`none | rwpe8 | rwpe16`) appends a pre-computed node
-encoding to the 6 entity columns; only `node_proj` widens.
+encoding to the 6 entity columns; only `node_proj` widens. The `GFP_VARIANT` knob (`v0 | tuned`)
+replaces the 61 V0 GFP columns of `edge_attr` by the 64-column tuned sheet at load time, normalised
+with the same train-fit recipe; only the edge projections and the readout input widen.
 
 `rwpe_compute.py` — exact RWPE of one snapshot on CPU (scipy; P = D_out⁻¹ A without self-loops,
 step k = diag(Pᵏ), same maths as PyG `AddRandomWalkPE`), logging non-zeros, seconds and RAM per step.
@@ -45,7 +48,7 @@ Requires a WSL venv: `python3 -m venv ~/gfp_env && ~/gfp_env/bin/pip install 'nu
 ## Outputs (`Data/`, not versioned — regenerate with the notebooks)
 
 `edge_features.csv` · `node_features.csv` · `feature_meta.json` (feature groups, dims, ablation grid) ·
-`standard_scaler.pkl` · `train/val/test_graph.pt` · `account_to_idx.pkl` · `gfp_variants/tuned.npy` (+ `tuned_cols.json`) ·
+`standard_scaler.pkl` · `train/val/test_graph.pt` · `account_to_idx.pkl` · `gfp_variants/tuned.npy` (+ `tuned_cols.json`; Kaggle dataset `hi-small-gfp-tuned`) ·
 `rwpe/rwpe_k{8,16}_{train,val,test}.pt` (RWPE node encodings, float32 [515,070, k])
 
 ## Model comparison
@@ -60,4 +63,5 @@ every metric on train, val and test. Results per family in `Outputs/<FAMILY>/` a
 under 0.02 are ties; test is shown, never used to choose): GIN-5; GAT-4 ≈ GAT-5; PNA-2 ≈ PNA-4 ≈
 PNA-5; TR-4 ≈ TR-5 — in every family, baseline features in message passing with all 81 features
 at the readout is among the best (test F1 0.49–0.53 for GIN and GATv2, 0.59–0.62 for PNA and the
-graph transformer). Next: the same configurations with the RWPE node encoding (§7.5).
+graph transformer). The RWPE node encoding (§7.5) changes none of this: ties for GIN, PNA and the
+transformer, a borderline gain for GATv2 only.

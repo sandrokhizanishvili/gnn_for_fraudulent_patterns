@@ -36,7 +36,7 @@ The 61 GFP structural edge features are covered in §3.
 | Feature | What it is | How it is computed |
 |---|---|---|
 | `EntityType_*` — 6 one-hot columns: Corporation, Individual, Partnership, Sole, Country, Direct | the kind of account holder — the only account attribute the dataset provides | first word of the entity name in `HI-Small_accounts.csv` ("Corporation #33520" → Corporation), one-hot encoded; accounts that appear only in transactions get an all-zero vector |
-| `RWPE_1..16` — 16 random-walk return probabilities (`NODE_ENC = rwpe16`; `rwpe8` = the first 8) — ⬜ runs planned (§7.5) | where the account sits in the graph: step k = probability that a k-step random walk that starts at the account is back at it; an account on a cycle of length k gets a high step k | per snapshot from that snapshot's own edges (train / train+val / all) with P = D_out⁻¹ A — the maths of PyG `AddRandomWalkPE`, computed exactly by `rwpe_compute.py` and checked in `RWPE_encoding.ipynb`; self-loops dropped when building P (table below), so step 1 is 0; values in [0, 1]; appended to the 6 entity columns at run time (`Data/rwpe/`), graph files unchanged |
+| `RWPE_1..16` — 16 random-walk return probabilities (`NODE_ENC = rwpe16`; `rwpe8` = the first 8) — ✅ 8 runs (§7.5): ties for GIN, PNA, Transformer; GAT-5 just above the tie band | where the account sits in the graph: step k = probability that a k-step random walk that starts at the account is back at it; an account on a cycle of length k gets a high step k | per snapshot from that snapshot's own edges (train / train+val / all) with P = D_out⁻¹ A — the maths of PyG `AddRandomWalkPE`, computed exactly by `rwpe_compute.py` and checked in `RWPE_encoding.ipynb`; self-loops dropped when building P (table below), so step 1 is 0; values in [0, 1]; appended to the 6 entity columns at run time (`Data/rwpe/`), graph files unchanged |
 
 Everything else the model knows about an account comes from message passing over its transactions.
 
@@ -140,8 +140,10 @@ noise from coincidental long patterns) and is the follow-up if tuned helps.
 causality as V0 (99.02 % of first-ever transactions see only themselves, worst case degree 9);
 row by row every tuned count is ≥ V0's (rows aligned; 3 of 5 M temporal-cycle rows differ, a
 snapml search quirk); the strongest label correlation rises from +0.064 (V0, 2–3-hop cycles) to
-+0.088 (tuned, 4–6-hop cycles); scatter-gather columns stay at ≈ 0 in both. Next step: retrain
-config 5 of GIN and PNA with tuned, nothing else changed.
++0.088 (tuned, 4–6-hop cycles); scatter-gather columns stay at ≈ 0 in both. Next step: configs 5
+and 4 of every operator with tuned in place of V0 (`GFP_fixed_architecture.ipynb`; the sheet is
+swapped into the GFP block at load time, nothing else changed; rule and run list in
+`EXPERIMENTS.md` §3); results will go to §7.6.
 
 **Two snapml pitfalls, found by our checks and fixed:**
 
@@ -932,34 +934,228 @@ configurations as the PNA tie (curves in §7.4.2, §7.4.4, §7.4.5).
 - No sign of leakage: same data, splits and loaders as the other families, test below
   validation in every run.
 
-### 7.5 RWPE node encoding — ⬜ planned (stage 1: 8 runs)
+### 7.5 RWPE node encoding — stage 1 (8 runs, 5 Oct)
 
-Does a random-walk positional encoding (RWPE, §2) help when everything else is held fixed?
-Each run repeats one finished configuration with `NODE_ENC = rwpe16`; only `node_proj` widens
-to (6 + 16) → 128 (+2,048 parameters), `invariant_params` stays at the family value.
-Notebook `RWPE_fixed_architecture.ipynb`, all eight runs in one Kaggle session so one executed
-notebook holds every training log; outputs in `Outputs/RWPE/<FAMILY>/<run>_enc-rwpe16/` (separate from the operator batches in `Outputs/<FAMILY>/`).
+Does the random-walk positional encoding (RWPE, §2: 16 directed return probabilities per account, non-zero for under 2 % of accounts) help when everything else is held fixed? Each run repeats one finished configuration with `NODE_ENC = rwpe16`: only `node_proj` widens to (6 + 16) → 128 (+2,048 parameters), `invariant_params` stays at the family value (GIN 67,587 · GATv2 67,585 · PNA 427,265 · Transformer 133,121, verified in every row). All eight runs come from one Kaggle session of `RWPE_fixed_architecture.ipynb` (5.9 h, T4); artifacts in `Outputs/RWPE/<FAMILY>/<run>/`. Decided on validation F1 only, gaps under 0.02 are ties; test is shown, never used to choose.
 
-| Run | Repeats | Compare with (validation F1) | Status |
-|---|---|---|---|
-| GIN-5 + RWPE | base / base+GFP | GIN-5 0.609 | ⬜ |
-| GIN-4 + RWPE | base+GFP / base+GFP | GIN-4 0.598 (overfit without RWPE) | ⬜ |
-| GAT-5 + RWPE | base / base+GFP | GAT-5 0.550 | ⬜ |
-| GAT-4 + RWPE | base+GFP / base+GFP | GAT-4 0.570 | ⬜ |
-| PNA-5 + RWPE | base / base+GFP | PNA-5 0.648 | ⬜ |
-| PNA-4 + RWPE | base+GFP / base+GFP | PNA-4 0.648 (mild overfit without RWPE) | ⬜ |
-| TR-5 + RWPE | base / base+GFP | TR-5 0.629 | ⬜ |
-| TR-4 + RWPE | base+GFP / base+GFP | TR-4 0.644 (mild overfit without RWPE) | ⬜ |
+#### 7.5.1 GIN-5 + RWPE · base / base+GFP · rwpe16
 
-- **Decision rule, fixed in advance (validation F1 only, gap < 0.02 = tie):** k = 8 runs only
-  if k = 16 shows an uplift (> 0.02 over the matching run without RWPE); then keep k = 8 if it
-  ties with k = 16, otherwise keep k = 16. No uplift at k = 16 → stop, RWPE is a null result.
-  Test is never used to choose.
-- Each finished run gets the same per-run section as above (metrics table on train / val /
-  test, curves, ≤ 3 bullets with a comment on overfitting from the curves), plus one table per
-  operator: without RWPE vs with RWPE, all metrics on all three splits.
-- Caveat to repeat with every result: val/test RWPE also reflects edges later than the seed
-  edge (§2).
+Best epoch 16 · threshold 0.650 · params 118,275 · 63 s / epoch · `Outputs/RWPE/GIN/gin_mp-base_readout-full_dir-in_enc-rwpe16/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.572 | 0.786 | 0.449 | 0.535 | 0.990 | 0.0139 | 0.922 |
+| val | 0.598 | 0.865 | 0.457 | 0.536 | 0.981 | 0.0181 | 0.851 |
+| test | **0.486** | 0.765 | 0.356 | 0.435 | 0.972 | 0.0183 | 0.815 |
+
+- Tie with GIN-5 on validation (0.598 vs 0.609, −0.011); on test 0.486 vs 0.525, lower on every metric except precision (0.765 vs 0.678), because the threshold moved up to 0.65 and recall fell to 0.356.
+- Mild overfitting that GIN-5 did not have: validation loss is lowest at epoch 7 and drifts up to 0.019 by epoch 20 while train loss keeps falling; train PR-AUC passes validation after epoch 13 (0.541 vs 0.524 at the end).
+- The same configuration run on 4 Oct with the same seed gave validation 0.600 and test 0.524: validation agrees within 0.002, test moved by 0.04 — the test spread of a single seed (§7.5.9).
+
+![GIN-5 + RWPE — loss, F1, PR-AUC per epoch (dashed = saved checkpoint), test PR curve](Outputs/RWPE/GIN/gin_mp-base_readout-full_dir-in_enc-rwpe16/curves.png)
+
+#### 7.5.2 GIN-4 + RWPE · base+GFP / base+GFP · rwpe16
+
+Best epoch 7 · threshold 0.529 · params 133,891 · 127 s / epoch · `Outputs/RWPE/GIN/gin_mp-full_readout-full_dir-in_enc-rwpe16/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.526 | 0.598 | 0.469 | 0.515 | 0.986 | 0.0135 | 0.896 |
+| val | 0.594 | 0.822 | 0.465 | 0.540 | 0.980 | 0.0182 | 0.853 |
+| test | **0.519** | 0.738 | 0.401 | 0.465 | 0.974 | 0.0187 | 0.831 |
+
+- Tie with GIN-4 on validation (0.594 vs 0.598) and on test (0.519 vs 0.512); precision and recall within 0.01 of GIN-4.
+- Overfits exactly like GIN-4: validation loss bottoms at epoch 7 (0.018) and climbs to 0.025 by epoch 20 while train PR-AUC reaches 0.62 against 0.50 on validation; the checkpoint at epoch 7 was taken before the damage. RWPE neither causes nor cures the overfitting of this configuration.
+
+![GIN-4 + RWPE — loss, F1, PR-AUC per epoch (dashed = saved checkpoint), test PR curve](Outputs/RWPE/GIN/gin_mp-full_readout-full_dir-in_enc-rwpe16/curves.png)
+
+#### 7.5.3 GAT-5 + RWPE · base / base+GFP · rwpe16
+
+Best epoch 15 · threshold 0.495 · params 118,017 · 84 s / epoch · `Outputs/RWPE/GAT/gat_mp-base_readout-full_dir-in_enc-rwpe16/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.473 | 0.566 | 0.407 | 0.428 | 0.985 | 0.0133 | 0.880 |
+| val | 0.572 | 0.723 | 0.473 | 0.515 | 0.982 | 0.0185 | 0.868 |
+| test | **0.513** | 0.624 | 0.435 | 0.469 | 0.979 | 0.0193 | 0.856 |
+
+- The only run above the tie band: validation F1 0.572 vs 0.550 for GAT-5 (+0.022); on test 0.513 vs 0.500 (+0.013), with recall up (0.435 vs 0.383) and precision down (0.624 vs 0.720) at a lower threshold (0.495 vs 0.603).
+- No overfitting: validation loss flat from epoch 12, train PR-AUC (0.43) below validation (0.52) throughout. It converged by epoch 15, whereas GAT-5 was still improving at epoch 20, so part of the gap may be convergence rather than the encoding.
+- Triggers the k = 8 rule for GAT config 5 (§7.5.9).
+
+![GAT-5 + RWPE — loss, F1, PR-AUC per epoch (dashed = saved checkpoint), test PR curve](Outputs/RWPE/GAT/gat_mp-base_readout-full_dir-in_enc-rwpe16/curves.png)
+
+#### 7.5.4 GAT-4 + RWPE · base+GFP / base+GFP · rwpe16
+
+Best epoch 17 · threshold 0.555 · params 133,633 · 145 s / epoch · `Outputs/RWPE/GAT/gat_mp-full_readout-full_dir-in_enc-rwpe16/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.510 | 0.663 | 0.414 | 0.467 | 0.987 | 0.0136 | 0.900 |
+| val | 0.569 | 0.797 | 0.443 | 0.519 | 0.982 | 0.0185 | 0.866 |
+| test | **0.502** | 0.681 | 0.398 | 0.460 | 0.977 | 0.0189 | 0.842 |
+
+- Exact tie with GAT-4 on validation (0.569 vs 0.570); test 0.502 vs 0.488 (+0.014, inside noise), precision up (0.681 vs 0.611), recall down (0.398 vs 0.406).
+- No overfitting, like every GATv2 run: validation loss flat from epoch 5, train PR-AUC below validation to the end (0.47 vs 0.52).
+
+![GAT-4 + RWPE — loss, F1, PR-AUC per epoch (dashed = saved checkpoint), test PR curve](Outputs/RWPE/GAT/gat_mp-full_readout-full_dir-in_enc-rwpe16/curves.png)
+
+#### 7.5.5 PNA-5 + RWPE · base / base+GFP · rwpe16
+
+Best epoch 17 · threshold 0.710 · params 609,537 · 183 s / epoch · `Outputs/RWPE/PNA/pna_mp-base_readout-full_dir-in_enc-rwpe16/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.601 | 0.833 | 0.471 | 0.579 | 0.992 | 0.0142 | 0.940 |
+| val | 0.649 | 0.856 | 0.523 | 0.613 | 0.986 | 0.0188 | 0.884 |
+| test | **0.610** | 0.786 | 0.498 | 0.578 | 0.986 | 0.0200 | 0.887 |
+
+- Tie with PNA-5 everywhere: validation 0.650 vs 0.648, test 0.610 vs 0.611, PR-AUC within 0.005, the same threshold (0.71).
+- Clean curves: validation loss lowest at the checkpoint (epoch 17), train PR-AUC below validation (0.586 vs 0.601).
+
+![PNA-5 + RWPE — loss, F1, PR-AUC per epoch (dashed = saved checkpoint), test PR curve](Outputs/RWPE/PNA/pna_mp-base_readout-full_dir-in_enc-rwpe16/curves.png)
+
+#### 7.5.6 PNA-4 + RWPE · base+GFP / base+GFP · rwpe16
+
+Best epoch 9 · threshold 0.628 · params 625,153 · 230 s / epoch · `Outputs/RWPE/PNA/pna_mp-full_readout-full_dir-in_enc-rwpe16/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.574 | 0.749 | 0.465 | 0.542 | 0.991 | 0.0139 | 0.924 |
+| val | 0.644 | 0.842 | 0.521 | 0.591 | 0.984 | 0.0185 | 0.866 |
+| test | **0.607** | 0.776 | 0.498 | 0.569 | 0.985 | 0.0200 | 0.886 |
+
+- Tie with PNA-4 (validation 0.644 vs 0.648; test 0.607 vs 0.617); precision lower (0.776 vs 0.856) and recall higher (0.498 vs 0.482) at a lower threshold (0.628 vs 0.699).
+- Mild overfitting as in PNA-4: validation loss lowest at epoch 9 (0.0155) and up to 0.019 by epoch 20; train PR-AUC crosses validation at epoch 15 and ends 0.62 vs 0.58. The checkpoint sits at epoch 9, six epochs earlier than PNA-4's.
+
+![PNA-4 + RWPE — loss, F1, PR-AUC per epoch (dashed = saved checkpoint), test PR curve](Outputs/RWPE/PNA/pna_mp-full_readout-full_dir-in_enc-rwpe16/curves.png)
+
+#### 7.5.7 TR-5 + RWPE · base / base+GFP · rwpe16
+
+Best epoch 18 · threshold 0.654 · params 183,553 · 84 s / epoch · `Outputs/RWPE/TRANSFORMER/transformer_mp-base_readout-full_dir-in_enc-rwpe16/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.575 | 0.788 | 0.453 | 0.548 | 0.991 | 0.0139 | 0.924 |
+| val | 0.624 | 0.855 | 0.491 | 0.576 | 0.983 | 0.0183 | 0.860 |
+| test | **0.592** | 0.794 | 0.472 | 0.560 | 0.984 | 0.0198 | 0.878 |
+
+- Tie with TR-5 (validation 0.624 vs 0.629; test 0.592 vs 0.598); test PR-AUC and Recall@5 % slightly higher (0.560 vs 0.553, 0.878 vs 0.871), precision lower (0.794 vs 0.832).
+- No overfitting: validation loss flat from epoch 9, train PR-AUC below validation throughout (0.549 vs 0.574); checkpoint at epoch 18, four epochs later than TR-5.
+
+![TR-5 + RWPE — loss, F1, PR-AUC per epoch (dashed = saved checkpoint), test PR curve](Outputs/RWPE/TRANSFORMER/transformer_mp-base_readout-full_dir-in_enc-rwpe16/curves.png)
+
+#### 7.5.8 TR-4 + RWPE · base+GFP / base+GFP · rwpe16
+
+Best epoch 11 · threshold 0.655 · params 199,169 · 138 s / epoch · `Outputs/RWPE/TRANSFORMER/transformer_mp-full_readout-full_dir-in_enc-rwpe16/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.583 | 0.769 | 0.469 | 0.567 | 0.992 | 0.0141 | 0.936 |
+| val | 0.636 | 0.846 | 0.509 | 0.583 | 0.983 | 0.0184 | 0.863 |
+| test | **0.614** | 0.817 | 0.492 | 0.575 | 0.985 | 0.0200 | 0.890 |
+
+- Tie with TR-4 on validation (0.636 vs 0.644); the highest test F1 of the eight RWPE runs (0.614 vs 0.602 for TR-4) with the best test PR-AUC (0.575) and Recall@5 % (0.890) of the batch — all inside single-seed noise.
+- Mild overfitting as in TR-4: validation loss lowest at epoch 5, train PR-AUC crosses validation at epoch 12 and ends 0.606 vs 0.576; validation F1 stays flat at 0.63–0.64, so the checkpoint at epoch 11 is unaffected.
+
+![TR-4 + RWPE — loss, F1, PR-AUC per epoch (dashed = saved checkpoint), test PR curve](Outputs/RWPE/TRANSFORMER/transformer_mp-full_readout-full_dir-in_enc-rwpe16/curves.png)
+
+#### 7.5.9 With vs without RWPE — verdict
+
+Validation F1 decides (gap < 0.02 = tie); test shown for completeness.
+
+| Run | F1 val without | F1 val with | Δ val | Verdict (rule) | F1 test without | F1 test with | best epoch without / with | Overfitting without / with |
+|---|---|---|---|---|---|---|---|---|
+| GIN-5 | 0.609 | 0.598 | -0.011 | tie | 0.525 | 0.486 | 8 / 16 | no / mild |
+| GIN-4 | 0.598 | 0.594 | -0.004 | tie | 0.512 | 0.519 | 10 / 7 | yes / yes |
+| GAT-5 | 0.550 | 0.572 | +0.022 | uplift (> 0.02) → k = 8 run | 0.500 | 0.513 | 20 / 15 | no / no |
+| GAT-4 | 0.570 | 0.569 | -0.000 | tie | 0.488 | 0.502 | 19 / 17 | no / no |
+| PNA-5 | 0.648 | 0.649 | +0.001 | tie | 0.611 | 0.610 | 15 / 17 | no / no |
+| PNA-4 | 0.648 | 0.644 | -0.004 | tie | 0.617 | 0.607 | 15 / 9 | mild / mild |
+| TR-5 | 0.629 | 0.624 | -0.005 | tie | 0.598 | 0.592 | 14 / 18 | no / no |
+| TR-4 | 0.644 | 0.636 | -0.008 | tie | 0.602 | 0.614 | 15 / 11 | mild / mild |
+
+**GIN: without vs with RWPE, all metrics, all splits**
+
+| Run | Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|---|
+| GIN-5 | train | 0.534 | 0.666 | 0.445 | 0.482 | 0.986 | 0.0134 | 0.886 |
+| GIN-5 | val | 0.609 | 0.820 | 0.484 | 0.549 | 0.982 | 0.0184 | 0.864 |
+| GIN-5 | test | 0.525 | 0.678 | 0.429 | 0.484 | 0.980 | 0.0195 | 0.867 |
+| GIN-5 + RWPE | train | 0.572 | 0.786 | 0.449 | 0.535 | 0.990 | 0.0139 | 0.922 |
+| GIN-5 + RWPE | val | 0.598 | 0.865 | 0.457 | 0.536 | 0.981 | 0.0181 | 0.851 |
+| GIN-5 + RWPE | test | 0.486 | 0.765 | 0.356 | 0.435 | 0.972 | 0.0183 | 0.815 |
+| GIN-4 | train | 0.563 | 0.692 | 0.475 | 0.546 | 0.991 | 0.0140 | 0.928 |
+| GIN-4 | val | 0.598 | 0.831 | 0.467 | 0.538 | 0.979 | 0.0178 | 0.837 |
+| GIN-4 | test | 0.512 | 0.743 | 0.390 | 0.479 | 0.974 | 0.0186 | 0.827 |
+| GIN-4 + RWPE | train | 0.526 | 0.598 | 0.469 | 0.515 | 0.986 | 0.0135 | 0.896 |
+| GIN-4 + RWPE | val | 0.594 | 0.822 | 0.465 | 0.540 | 0.980 | 0.0182 | 0.853 |
+| GIN-4 + RWPE | test | 0.519 | 0.738 | 0.401 | 0.465 | 0.974 | 0.0187 | 0.831 |
+
+**GATv2: without vs with RWPE, all metrics, all splits**
+
+| Run | Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|---|
+| GAT-5 | train | 0.475 | 0.679 | 0.365 | 0.424 | 0.985 | 0.0132 | 0.878 |
+| GAT-5 | val | 0.550 | 0.814 | 0.416 | 0.498 | 0.982 | 0.0185 | 0.866 |
+| GAT-5 | test | 0.500 | 0.720 | 0.383 | 0.451 | 0.980 | 0.0192 | 0.851 |
+| GAT-5 + RWPE | train | 0.473 | 0.566 | 0.407 | 0.428 | 0.985 | 0.0133 | 0.880 |
+| GAT-5 + RWPE | val | 0.572 | 0.723 | 0.473 | 0.515 | 0.982 | 0.0185 | 0.868 |
+| GAT-5 + RWPE | test | 0.513 | 0.624 | 0.435 | 0.469 | 0.979 | 0.0193 | 0.856 |
+| GAT-4 | train | 0.507 | 0.597 | 0.441 | 0.477 | 0.988 | 0.0137 | 0.906 |
+| GAT-4 | val | 0.570 | 0.765 | 0.454 | 0.512 | 0.981 | 0.0182 | 0.856 |
+| GAT-4 | test | 0.488 | 0.611 | 0.406 | 0.458 | 0.978 | 0.0189 | 0.841 |
+| GAT-4 + RWPE | train | 0.510 | 0.663 | 0.414 | 0.467 | 0.987 | 0.0136 | 0.900 |
+| GAT-4 + RWPE | val | 0.569 | 0.797 | 0.443 | 0.519 | 0.982 | 0.0185 | 0.866 |
+| GAT-4 + RWPE | test | 0.502 | 0.681 | 0.398 | 0.460 | 0.977 | 0.0189 | 0.842 |
+
+**PNA: without vs with RWPE, all metrics, all splits**
+
+| Run | Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|---|
+| PNA-5 | train | 0.587 | 0.819 | 0.458 | 0.560 | 0.991 | 0.0140 | 0.927 |
+| PNA-5 | val | 0.648 | 0.872 | 0.516 | 0.610 | 0.986 | 0.0188 | 0.883 |
+| PNA-5 | test | 0.611 | 0.800 | 0.494 | 0.574 | 0.986 | 0.0201 | 0.892 |
+| PNA-5 + RWPE | train | 0.601 | 0.833 | 0.471 | 0.579 | 0.992 | 0.0142 | 0.940 |
+| PNA-5 + RWPE | val | 0.649 | 0.856 | 0.523 | 0.613 | 0.986 | 0.0188 | 0.884 |
+| PNA-5 + RWPE | test | 0.610 | 0.786 | 0.498 | 0.578 | 0.986 | 0.0200 | 0.887 |
+| PNA-4 | train | 0.598 | 0.839 | 0.464 | 0.585 | 0.993 | 0.0144 | 0.956 |
+| PNA-4 | val | 0.648 | 0.894 | 0.508 | 0.606 | 0.985 | 0.0185 | 0.870 |
+| PNA-4 | test | 0.617 | 0.856 | 0.482 | 0.575 | 0.984 | 0.0200 | 0.888 |
+| PNA-4 + RWPE | train | 0.574 | 0.749 | 0.465 | 0.542 | 0.991 | 0.0139 | 0.924 |
+| PNA-4 + RWPE | val | 0.644 | 0.842 | 0.521 | 0.591 | 0.984 | 0.0185 | 0.866 |
+| PNA-4 + RWPE | test | 0.607 | 0.776 | 0.498 | 0.569 | 0.985 | 0.0200 | 0.886 |
+
+**Graph Transformer: without vs with RWPE, all metrics, all splits**
+
+| Run | Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|---|
+| TR-5 | train | 0.569 | 0.813 | 0.438 | 0.538 | 0.990 | 0.0139 | 0.923 |
+| TR-5 | val | 0.629 | 0.893 | 0.485 | 0.577 | 0.984 | 0.0185 | 0.867 |
+| TR-5 | test | 0.598 | 0.832 | 0.466 | 0.553 | 0.983 | 0.0196 | 0.871 |
+| TR-5 + RWPE | train | 0.575 | 0.788 | 0.453 | 0.548 | 0.991 | 0.0139 | 0.924 |
+| TR-5 + RWPE | val | 0.624 | 0.855 | 0.491 | 0.576 | 0.983 | 0.0183 | 0.860 |
+| TR-5 + RWPE | test | 0.592 | 0.794 | 0.472 | 0.560 | 0.984 | 0.0198 | 0.878 |
+| TR-4 | train | 0.597 | 0.814 | 0.471 | 0.587 | 0.993 | 0.0144 | 0.955 |
+| TR-4 | val | 0.644 | 0.879 | 0.508 | 0.588 | 0.981 | 0.0182 | 0.854 |
+| TR-4 | test | 0.602 | 0.788 | 0.487 | 0.574 | 0.983 | 0.0198 | 0.881 |
+| TR-4 + RWPE | train | 0.583 | 0.769 | 0.469 | 0.567 | 0.992 | 0.0141 | 0.936 |
+| TR-4 + RWPE | val | 0.636 | 0.846 | 0.509 | 0.583 | 0.983 | 0.0184 | 0.863 |
+| TR-4 + RWPE | test | 0.614 | 0.817 | 0.492 | 0.575 | 0.985 | 0.0200 | 0.890 |
+
+**The GIN pair run twice** (same configuration and seed, two Kaggle sessions):
+
+| Run (seed 42) | val F1 4 Oct | val F1 5 Oct | test F1 4 Oct | test F1 5 Oct | best epoch 4 Oct / 5 Oct |
+|---|---|---|---|---|---|
+| GIN-5 + RWPE | 0.600 | 0.598 | 0.524 | 0.486 | 14 / 16 |
+| GIN-4 + RWPE | 0.589 | 0.594 | 0.501 | 0.519 | 16 / 7 |
+
+- **Rule outcome:** seven of the eight runs are ties (validation gaps of 0.011 or less). GAT-5 + RWPE is +0.022, just over the 0.02 line, so by the rule fixed in advance one k = 8 run follows on GAT config 5 (`rwpe8`, about 30 min); k = 8 is kept only if it ties with k = 16. For GIN, PNA and the Transformer RWPE is a null result and nothing further runs.
+- **Reading:** this matches §2 — the directed RWPE is non-zero for under 2 % of accounts, and GFP at the readout already encodes the cycles those accounts sit on. The operators that extract the most from the graph on their own (PNA, Transformer) gain nothing; GATv2, the operator that profits least from edge features (§7.2), is the only one with a hint of a gain, and it came as higher recall at a lower threshold rather than better ranking (validation PR-AUC 0.515 vs 0.498).
+- **Overfitting is unchanged by RWPE:** config 4 overfits for GIN, PNA and the Transformer with or without it (the checkpoints move earlier, to epochs 7, 9 and 11), config 5 does not, and GATv2 never does. The one exception is GIN-5 + RWPE, which shows a mild drift GIN-5 lacked.
+- **Seed noise, measured:** the GIN pair was trained twice with the same seed (4 Oct preliminary session, 5 Oct full session; GPU non-determinism). Validation F1 moved by at most 0.005, test F1 by up to 0.04 — the 0.02 validation tie band holds, and test gaps under about 0.04 mean nothing for a single seed. The 4 Oct files are superseded (kept in git history, commit 4fcb616).
+- **Caveat:** on val/test the RWPE of an account also reflects edges later than the seed edge (§2); the leakage check showed that only about 40 % of the laundering edges flagged by a non-zero RWPE stay flagged without those later edges, so the snapshot RWPE is if anything optimistic — which makes the null result the safer conclusion.
+- **Runtime (from the history logs):** 21–77 min per run, 5.9 h for the batch; PNA-4 + RWPE slowest at 230 s per epoch, GIN-5 + RWPE fastest at 63 s.
 
 ## 8 · Repository map
 

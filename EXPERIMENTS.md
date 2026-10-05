@@ -25,9 +25,12 @@ Mirrored on the Notion experiments page (kept in sync).
       results in `Progress_Report.md` §7.2 (best by validation F1: GAT-4 ≈ GAT-5, a tie)
 - [x] Graph Transformer batch (TR-1 … TR-7) trained under the same protocol — Kaggle, 28 Sep;
       results in `Progress_Report.md` §7.4 (best by validation F1: TR-4 ≈ TR-5, a tie; TR-2 at the edge)
-- [ ] RWPE node encoding (k = 16): files computed (`RWPE_encoding.ipynb` → `Data/rwpe/`),
-      `NODE_ENC` knob in `gnn_core.py`, `RWPE_fixed_architecture.ipynb` ready — the 8 stage-1
-      runs of section 3 "RWPE runs" wait for Kaggle
+- [x] RWPE stage 1 (8 runs, `rwpe16`) trained on Kaggle, 5 Oct; results in `Progress_Report.md`
+      §7.5 (ties for GIN, PNA and the Transformer; GAT-5 + RWPE just above the tie band → one
+      k = 8 run on GAT config 5 next, section 3 "RWPE runs")
+- [ ] GFP `tuned` sheet: `GFP_VARIANT` knob in `gnn_core.py` (the sheet is swapped into the GFP
+      block at load time, graph files untouched), `GFP_fixed_architecture.ipynb` ready — the 8
+      runs of section 3 "GFP tuned runs" wait for Kaggle
 
 ---
 
@@ -44,7 +47,9 @@ laundering). Each transaction is an edge, each account a node.
 - [ ] **GFP tuned to the data** (64 per transaction) — one alternative sheet, `tuned`: 48 h windows
       (scatter-gather 12 h), simple cycles up to 12 hops, four pattern bins [2, 4, 6, 8]; chosen from
       the durations and sizes of HI-Small's 370 annotated attempts (`GFP_experiments.ipynb`,
-      `Progress_Report.md` §3). Computed; next: retrain config 5 of GIN and PNA with it
+      `Progress_Report.md` §3). Computed; runs: configs 5 and 4 of every operator with
+      `GFP_VARIANT = tuned` (section 3, "GFP tuned runs"), each compared with the family's own V0
+      run on validation F1 (gap < 0.02 = tie)
 - [ ] **RWPE node encoding** (16 per account, k = 16 first) — directed random-walk return
       probabilities (walks follow the money: non-zero = the account sits on a directed money
       cycle of length ≤ 16); one vector per snapshot from
@@ -131,15 +136,38 @@ passing / which the final classifier sees. "base" = 20 baseline, "base+GFP" = al
 RWPE node encoding (`NODE_ENC = rwpe16`); each compared with the family's own config 5 / 4 above
 on validation F1. Summary file: `Outputs/RWPE/<FAMILY>/batch_summary_rwpe.csv`; the operator batches stay in `Outputs/<FAMILY>/`.*
 
-- [ ] **GIN-5 + RWPE** · base / base+GFP · rwpe16 → `Outputs/RWPE/GIN/gin_mp-base_readout-full_dir-in_enc-rwpe16/`
-- [ ] **GIN-4 + RWPE** · base+GFP / base+GFP · rwpe16 → `Outputs/RWPE/GIN/gin_mp-full_readout-full_dir-in_enc-rwpe16/`
-- [ ] **GAT-5 + RWPE** · base / base+GFP · rwpe16 → `Outputs/RWPE/GAT/gat_mp-base_readout-full_dir-in_enc-rwpe16/`
-- [ ] **GAT-4 + RWPE** · base+GFP / base+GFP · rwpe16 → `Outputs/RWPE/GAT/gat_mp-full_readout-full_dir-in_enc-rwpe16/`
-- [ ] **PNA-5 + RWPE** · base / base+GFP · rwpe16 → `Outputs/RWPE/PNA/pna_mp-base_readout-full_dir-in_enc-rwpe16/`
-- [ ] **PNA-4 + RWPE** · base+GFP / base+GFP · rwpe16 → `Outputs/RWPE/PNA/pna_mp-full_readout-full_dir-in_enc-rwpe16/`
-- [ ] **TR-5 + RWPE** · base / base+GFP · rwpe16 → `Outputs/RWPE/TRANSFORMER/transformer_mp-base_readout-full_dir-in_enc-rwpe16/`
-- [ ] **TR-4 + RWPE** · base+GFP / base+GFP · rwpe16 → `Outputs/RWPE/TRANSFORMER/transformer_mp-full_readout-full_dir-in_enc-rwpe16/`
-- [ ] **k = 8 runs** (`rwpe8`, same configs) — only if k = 16 shows an uplift (rule in section 1)
+- [x] **GIN-5 + RWPE** · base / base+GFP · rwpe16 → `Outputs/RWPE/GIN/gin_mp-base_readout-full_dir-in_enc-rwpe16/`
+- [x] **GIN-4 + RWPE** · base+GFP / base+GFP · rwpe16 → `Outputs/RWPE/GIN/gin_mp-full_readout-full_dir-in_enc-rwpe16/`
+- [x] **GAT-5 + RWPE** · base / base+GFP · rwpe16 → `Outputs/RWPE/GAT/gat_mp-base_readout-full_dir-in_enc-rwpe16/`
+- [x] **GAT-4 + RWPE** · base+GFP / base+GFP · rwpe16 → `Outputs/RWPE/GAT/gat_mp-full_readout-full_dir-in_enc-rwpe16/`
+- [x] **PNA-5 + RWPE** · base / base+GFP · rwpe16 → `Outputs/RWPE/PNA/pna_mp-base_readout-full_dir-in_enc-rwpe16/`
+- [x] **PNA-4 + RWPE** · base+GFP / base+GFP · rwpe16 → `Outputs/RWPE/PNA/pna_mp-full_readout-full_dir-in_enc-rwpe16/`
+- [x] **TR-5 + RWPE** · base / base+GFP · rwpe16 → `Outputs/RWPE/TRANSFORMER/transformer_mp-base_readout-full_dir-in_enc-rwpe16/`
+- [x] **TR-4 + RWPE** · base+GFP / base+GFP · rwpe16 → `Outputs/RWPE/TRANSFORMER/transformer_mp-full_readout-full_dir-in_enc-rwpe16/`
+- [ ] **GAT-5 + rwpe8** · base / base+GFP · rwpe8 → `Outputs/RWPE/GAT/gat_mp-base_readout-full_dir-in_enc-rwpe8/` — the only configuration above the tie band at k = 16 (rule in section 1); k = 8 is kept only if it ties with k = 16. No k = 8 runs for GIN, PNA, Transformer (null result at k = 16)
+
+### GFP tuned runs — data-tuned GFP sheet (`GFP_fixed_architecture.ipynb`, all eight in one Kaggle session)
+
+*Config 5 (base / base+GFP) and config 4 (base+GFP / base+GFP) of each family with the `tuned`
+GFP sheet in place of V0 (`GFP_VARIANT = tuned`: the 64 columns are normalised like V0 and swapped
+into the GFP block at load time, `edge_attr` 84 wide, graph files untouched; `NODE_ENC = none`,
+one factor at a time). Summary file: `Outputs/GFP_TUNED/<FAMILY>/batch_summary_gfp_tuned.csv`.*
+
+- [ ] **GIN-5 + tuned** · base / base+GFP · tuned → `Outputs/GFP_TUNED/GIN/gin_mp-base_readout-full_dir-in_gfp-tuned/`
+- [ ] **GIN-4 + tuned** · base+GFP / base+GFP · tuned → `Outputs/GFP_TUNED/GIN/gin_mp-full_readout-full_dir-in_gfp-tuned/`
+- [ ] **GAT-5 + tuned** · base / base+GFP · tuned → `Outputs/GFP_TUNED/GAT/gat_mp-base_readout-full_dir-in_gfp-tuned/`
+- [ ] **GAT-4 + tuned** · base+GFP / base+GFP · tuned → `Outputs/GFP_TUNED/GAT/gat_mp-full_readout-full_dir-in_gfp-tuned/`
+- [ ] **PNA-5 + tuned** · base / base+GFP · tuned → `Outputs/GFP_TUNED/PNA/pna_mp-base_readout-full_dir-in_gfp-tuned/`
+- [ ] **PNA-4 + tuned** · base+GFP / base+GFP · tuned → `Outputs/GFP_TUNED/PNA/pna_mp-full_readout-full_dir-in_gfp-tuned/`
+- [ ] **TR-5 + tuned** · base / base+GFP · tuned → `Outputs/GFP_TUNED/TRANSFORMER/transformer_mp-base_readout-full_dir-in_gfp-tuned/`
+- [ ] **TR-4 + tuned** · base+GFP / base+GFP · tuned → `Outputs/GFP_TUNED/TRANSFORMER/transformer_mp-full_readout-full_dir-in_gfp-tuned/`
+
+**Decision rule, fixed in advance:** each run is compared with the family's own V0 config 5 / 4
+above on validation F1 only (gap < 0.02 = tie); test is never used to choose. If tuned wins on
+most configs, that is reported as a separate finding ("the data-tuned sheet helps"); V0 stays the
+default sheet for every other experiment (RWPE, direction, sampling, seeds) until I decide
+otherwise. Every result comments on overfitting from the curves, especially config 4 (overfit
+for GIN, mildly for PNA and the Transformer, on V0).
 
 ### Cross-checks (optional)
 
@@ -167,12 +195,22 @@ on validation F1. Summary file: `Outputs/RWPE/<FAMILY>/batch_summary_rwpe.csv`; 
 
 *Newest first. Unticked = in progress · ticked = finished and synced.*
 
+- [ ] **4 Oct** — `GFP_VARIANT` knob in `gnn_core.py` (v0 | tuned: the tuned sheet is normalised
+      like V0 and swapped into the GFP block at load time, `edge_attr` 81 → 84, only the edge
+      projections and the readout input widen, `invariant_params` unchanged);
+      `GFP_fixed_architecture.ipynb` ready with the 8 configs (5 and 4 of every operator), batch
+      not yet run; decision rule in section 3 "GFP tuned runs"
 - [ ] **4 Oct** — GFP `tuned` sheet (64 columns) computed in a rewritten `GFP_experiments.ipynb`;
       the four single-factor sheets of August (win48 / win120 / lc10 / rich) removed as
       uninformative; the "52 % / 84 % of hop gaps" claim did not reproduce and was replaced by the
       recomputed per-typology durations (`Progress_Report.md` §3); V0 relabelled "paper, cycles ≤ 6";
       `Data_checks.ipynb` §6 now checks the tuned sheet (59 checks, all pass)
-- [ ] **4 Oct** — RWPE node encoding: `rwpe_compute.py` + `RWPE_encoding.ipynb` (k = 8 and
+- [x] **5 Oct** — RWPE stage 1: all eight runs (configs 5 and 4 × four operators, `rwpe16`) in one
+      Kaggle session of `RWPE_fixed_architecture.ipynb`; results, curves and predictions in
+      `Outputs/RWPE/`, sections and comparison tables in `Progress_Report.md` §7.5; the GIN pair
+      of the 4 Oct preliminary session retrained with the same seed (validation agreed, test did
+      not — seed noise, §7.5.9), preliminary files superseded
+- [x] **4 Oct** — RWPE node encoding: `rwpe_compute.py` + `RWPE_encoding.ipynb` (k = 8 and
       k = 16 per snapshot, self-loops dropped, checked against PyG `AddRandomWalkPE`,
       `Data/rwpe/`); `NODE_ENC` knob in `gnn_core.py` (only `node_proj` widens);
       `RWPE_fixed_architecture.ipynb` ready with the 8 stage-1 configs, batch not yet run
@@ -224,6 +262,9 @@ on validation F1. Summary file: `Outputs/RWPE/<FAMILY>/batch_summary_rwpe.csv`; 
 
 RWPE runs use the same `mp` / `readout` dicts plus `operator` and `node_enc = 'rwpe16'`
 (configs 5 and 4); the run name adds `_enc-rwpe16`; the summary is `batch_summary_rwpe.csv`.
+GFP tuned runs use the same dicts plus `operator` and `gfp_variant = 'tuned'` (configs 5 and 4);
+the run name adds `_gfp-tuned`; the summary is `batch_summary_gfp_tuned.csv`; `results.json` and
+every batch summary carry a `gfp_variant` field (`v0` for all other runs).
 
 **Fixed sizes for the planned extensions** (chosen a priori, never tuned): RWPE k = 16 first
 (steps 1–16; covers the GFP cycle limit of 6 and the paper's 10 with margin), k = 8 (the course
@@ -232,7 +273,12 @@ self-loops, so step 1 is 0 for every account; Node2Vec dim = the RWPE k kept (ma
 comparison is about the kind of encoding, trained on the train graph only, zero vector for
 unseen accounts); Transformer = PyG `TransformerConv`, 4 heads × 32 = 128 (mirrors GATv2 so only
 the attention mechanism differs; local attention over the sampled `[100, 100]` neighbourhood).
-GFP variants are swapped into `edge_attr[:, 20:81]` after the same train-fit normalisation.
+GFP variants replace the GFP block of `edge_attr` (columns 20 onwards; 20 + 64 = 84 wide for
+tuned) at load time in `gnn_core.load_graphs` (`GFP_VARIANT`), after the same train-fit
+normalisation as V0 (vertex statistics: log1p → clip at train p1 / p99 → StandardScaler, fit on
+the train rows; pattern bins untouched); the graph files never change, and only the edge
+projections and the readout's first Linear widen (337 → 340 inputs). On Kaggle the tuned sheet
+comes from the separate dataset `hi-small-gfp-tuned` (`tuned.npy` + `tuned_cols.json`).
 RWPE on the val/test snapshots sees later edges than a seed edge — same caveat as neighbour
 sampling; reported as a limitation. RWPE files: `Data/rwpe/rwpe_k{8,16}_{train,val,test}.pt`,
 float32 [515,070, k], rows in `account_to_idx` order, computed by `rwpe_compute.py` (scipy,
