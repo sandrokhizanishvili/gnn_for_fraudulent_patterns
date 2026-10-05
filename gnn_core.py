@@ -2,8 +2,9 @@
 
 Everything that must be identical across operators lives here and is imported by the
 operator notebooks, which only set OPERATOR, the batch of knob configs and paths.
-Knobs handled here: mp / readout edge columns, MP_DIRECTION, TEMPORAL_SAMPLING and NODE_ENC
-(none | rwpe8 | rwpe16: pre-computed node encodings appended to the 6 entity columns).
+Knobs handled here: mp / readout edge columns, MP_DIRECTION, TEMPORAL_SAMPLING, NODE_ENC
+(none | rwpe8 | rwpe16: pre-computed node encodings appended to the 6 entity columns) and
+GFP_VARIANT (v0 | tuned: which GFP sheet fills the GFP block of edge_attr, swapped at load time).
 '''
 import gc
 import json
@@ -20,6 +21,7 @@ import torch
 import torch.nn as nn
 from sklearn.metrics import (average_precision_score, f1_score, precision_recall_curve,
                              precision_score, recall_score, roc_auc_score)
+from sklearn.preprocessing import StandardScaler
 from torch_geometric.data import Data
 from torch_geometric.loader import LinkNeighborLoader
 from torch_geometric.nn import GATv2Conv, GINConv, GINEConv, PNAConv, TransformerConv
@@ -42,6 +44,9 @@ SEED          = 42
 OPERATORS     = ('gin', 'pna', 'gat', 'transformer')
 NODE_ENCS     = ('none', 'rwpe8', 'rwpe16')   # NODE_ENC knob: node encoding appended to the entity one-hots
 BASE_NODE_DIM = 6                             # the entity one-hots every run has; encodings come after them
+GFP_VARIANTS  = ('v0', 'tuned')               # GFP_VARIANT knob: which GFP sheet fills edge_attr after the 20 baseline columns
+GFP_WIDTH     = {'v0': 61, 'tuned': 64}       # v0 = the sheet inside the graph files; tuned = Data/gfp_variants/tuned.npy
+BASE_EDGE_DIM = 20                            # baseline edge columns, always edge_attr[:, :20]
 SPLITS      = ('train', 'val', 'test')
 METRICS     = ('f1', 'precision', 'recall', 'pr_auc', 'roc_auc', 'precision_at_5pct', 'recall_at_5pct')
 RUN_FIELDS  = ('threshold', 'best_epoch', 'params', 'invariant_params')
@@ -65,20 +70,79 @@ def set_seed(seed):
     torch.cuda.manual_seed_all(seed)
 
 
-def load_graphs(data_dir):
-    '''Load the three cumulative snapshots and the feature column groups.
+def normalise_gfp_sheet(values, cols, n_train):
+    '''The GFP normalisation of Data_preparation.ipynb section 6, fit on the first n_train rows only.
 
-    Returns graphs {split: Data}, col_sets {none|base|gfp|full: column indices}, node_dim.
+    Pattern bins (*_bins_*) untouched; fan/deg/sum/avg/var/kurtosis: log1p -> clip at train p1/p99
+    -> StandardScaler; ratio/skew: clip -> StandardScaler. values [E, len(cols)] float32 -> float32.
     '''
+    assert values.shape == (values.shape[0], len(cols)) and values.dtype == np.float32
+    assert not np.isnan(values).any(), 'GFP sheet contains NaN'
+    pattern_cols = [c for c in cols if '_bins_' in c]
+    vertex_cols  = [c for c in cols if c not in pattern_cols]
+    log_cols = [c for c in vertex_cols if any(s in c for s in ['fan', 'deg', 'sum', 'avg', 'var', 'kurtosis'])]
+    std_cols = [c for c in vertex_cols if c not in log_cols]
+    print(f'GFP normalisation: untouched pattern bins {len(pattern_cols)} | log+scale {len(log_cols)} '
+          f'| scale-only {len(std_cols)} | fit on the first {n_train:,} rows')
+
+    out = values.copy()
+    for group, use_log in [(log_cols, True), (std_cols, False)]:
+        if not group:
+            continue
+        idx = [cols.index(c) for c in group]
+        vals = values[:, idx]
+        if use_log:
+            vals = np.log1p(np.clip(vals, 0, None))
+        p01 = np.percentile(vals[:n_train], 1, axis=0)
+        p99 = np.percentile(vals[:n_train], 99, axis=0)
+        vals = np.clip(vals, p01, p99)
+        scaler = StandardScaler().fit(vals[:n_train])
+        out[:, idx] = scaler.transform(vals).astype(np.float32)
+        del vals
+    if vertex_cols:
+        vertex = out[:, [cols.index(c) for c in vertex_cols]]
+        print(f'vertex stats after normalisation: min={vertex.min():.2f} max={vertex.max():.2f} '
+              f'mean={vertex.mean():.3f} std={vertex.std():.3f}')
+    assert not np.isnan(out).any()
+    return out
+
+
+def load_graphs(data_dir, gfp_variant='v0', gfp_dir=None):
+    '''Load the three cumulative snapshots and the feature column groups for the GFP_VARIANT knob.
+
+    v0 -> edge_attr as saved (20 baseline + 61 GFP); tuned -> the GFP block is replaced by
+    <gfp_dir>/tuned.npy (64 columns), normalised like v0 on the train rows. Returns graphs
+    {split: Data}, col_sets {none|base|gfp|full: column indices}, node_dim.
+    '''
+    assert gfp_variant in GFP_VARIANTS, f'unknown GFP variant {gfp_variant!r}; choose from {GFP_VARIANTS}'
     graphs = {split: torch.load(f'{data_dir}/{split}_graph.pt', weights_only=False) for split in SPLITS}
     meta = json.load(open(f'{data_dir}/feature_meta.json'))
+    base_cols, gfp_cols = meta['BASE_EDGE_COLS'], meta['GFP_FEAT_COLS']
+    assert len(base_cols) == BASE_EDGE_DIM and len(gfp_cols) == GFP_WIDTH['v0']
+    assert graphs['train'].edge_attr.shape[1] == len(meta['EDGE_FEAT_COLS']) == BASE_EDGE_DIM + GFP_WIDTH['v0']
 
-    all_cols = meta['EDGE_FEAT_COLS']
-    base_idx = [all_cols.index(c) for c in meta['BASE_EDGE_COLS']]   # 0..19
-    gfp_idx  = [all_cols.index(c) for c in meta['GFP_FEAT_COLS']]    # 20..80
+    if gfp_variant == 'tuned':
+        gfp_cols = json.load(open(f'{gfp_dir}/tuned_cols.json'))
+        sheet = np.load(f'{gfp_dir}/tuned.npy')
+        n_train, n_all = graphs['train'].edge_index.shape[1], graphs['test'].edge_index.shape[1]
+        assert sheet.shape == (n_all, GFP_WIDTH['tuned']) and len(gfp_cols) == GFP_WIDTH['tuned'], \
+            f'tuned sheet {sheet.shape} must have one row per edge of the test snapshot ({n_all:,}) and 64 columns'
+        print(f'GFP variant tuned: sheet {sheet.shape} from {gfp_dir}')
+        sheet = torch.from_numpy(normalise_gfp_sheet(sheet, gfp_cols, n_train))
+        for split, g in graphs.items():
+            n_edges = g.edge_index.shape[1]
+            g.edge_attr = torch.cat([g.edge_attr[:, :BASE_EDGE_DIM], sheet[:n_edges]], dim=1)
+        del sheet
+        gc.collect()
+
+    all_cols = base_cols + gfp_cols
+    base_idx = [all_cols.index(c) for c in base_cols]   # 0..19
+    gfp_idx  = [all_cols.index(c) for c in gfp_cols]    # 20..80 (v0) or 20..83 (tuned)
     col_sets = {'none': [], 'base': base_idx, 'gfp': gfp_idx, 'full': base_idx + gfp_idx}
     node_dim = graphs['train'].x.shape[1]
-    assert graphs['train'].edge_attr.shape[1] == len(all_cols) == 81
+    edge_dim = BASE_EDGE_DIM + GFP_WIDTH[gfp_variant]
+    assert all(g.edge_attr.shape[1] == len(all_cols) == edge_dim for g in graphs.values())
+    print(f'edge_attr width {edge_dim} (base {BASE_EDGE_DIM} + gfp {GFP_WIDTH[gfp_variant]}, variant {gfp_variant})')
 
     for split, g in graphs.items():
         n_eval = int(g.eval_mask.sum())
@@ -508,21 +572,24 @@ def plot_curves(history, y_test, p_test, test_pr_auc, best_epoch, run_name, path
     plt.close(fig)
 
 
-def run_name(operator, cfg, mp_direction='in', temporal=False, node_enc='none'):
-    '''<model>_mp-<mp>_readout-<ro>_dir-<dir>[_enc-<enc>][_temporal] (CLAUDE.md §6).'''
+def run_name(operator, cfg, mp_direction='in', temporal=False, node_enc='none', gfp_variant='v0'):
+    '''<model>_mp-<mp>_readout-<ro>_dir-<dir>[_enc-<enc>][_gfp-<variant>][_temporal] (CLAUDE.md §6).'''
     name = f"{operator}_mp-{cfg['mp']}_readout-{cfg['readout']}_dir-{mp_direction}"
     if node_enc != 'none':
         name += f'_enc-{node_enc}'
+    if gfp_variant != 'v0':
+        name += f'_gfp-{gfp_variant}'
     if temporal:
         name += '_temporal'
     return name
 
 
 def result_row(name, operator, cfg, mp_direction, temporal, best_epoch, threshold,
-               n_params, n_invariant, metrics, node_enc='none'):
+               n_params, n_invariant, metrics, node_enc='none', gfp_variant='v0'):
     '''The flat result row shared by results.json and batch_summary.csv.'''
     row = {'run': name, 'operator': operator, 'mp': cfg['mp'], 'readout': cfg['readout'],
-           'mp_direction': mp_direction, 'temporal_sampling': temporal, 'node_enc': node_enc, 'seed': SEED,
+           'mp_direction': mp_direction, 'temporal_sampling': temporal, 'node_enc': node_enc,
+           'gfp_variant': gfp_variant, 'seed': SEED,
            'best_epoch': best_epoch, 'threshold': threshold,
            'params': n_params, 'invariant_params': n_invariant}
     row.update(flatten_metrics(metrics))
@@ -551,13 +618,16 @@ def print_model_header(name, mp_idx, readout_idx, n_params, n_invariant, node_di
 # ==================================================================================================
 
 def run_experiment(operator, cfg, graphs, col_sets, node_dim, out_root, mp_direction='in', temporal=False,
-                   node_enc='none', enc_dir=None):
+                   node_enc='none', enc_dir=None, gfp_variant='v0'):
     '''Train and evaluate one knob configuration end-to-end; returns the flat result row.
 
     node_enc = 'none' leaves graph.x and node_dim as loaded; 'rwpe<k>' appends the k RWPE columns
-    from enc_dir, so only node_proj widens (6 + k -> 128).
+    from enc_dir, so only node_proj widens (6 + k -> 128). gfp_variant must be the one the graphs
+    were loaded with (load_graphs); it only labels the run, the swap happened at load time.
     '''
-    name = run_name(operator, cfg, mp_direction, temporal, node_enc)
+    assert len(col_sets['gfp']) == GFP_WIDTH[gfp_variant], \
+        f"graphs hold a {len(col_sets['gfp'])}-column GFP block, not the {gfp_variant!r} sheet; reload with load_graphs"
+    name = run_name(operator, cfg, mp_direction, temporal, node_enc, gfp_variant)
     out_dir = f'{out_root}/{name}'
     os.makedirs(out_dir, exist_ok=True)
     mp_idx, readout_idx = col_sets[cfg['mp']], col_sets[cfg['readout']]
@@ -577,7 +647,7 @@ def run_experiment(operator, cfg, graphs, col_sets, node_dim, out_root, mp_direc
     model.load_state_dict(torch.load(f'{out_dir}/best.pt', map_location=device))
     metrics, preds = score_all_splits(model, loaders, graphs, threshold)
     row = result_row(name, operator, cfg, mp_direction, temporal, best_epoch, threshold,
-                     n_params, n_invariant, metrics, node_enc)
+                     n_params, n_invariant, metrics, node_enc, gfp_variant)
     save_run(out_dir, row)
     save_predictions(out_dir, graphs, preds, threshold)
     plot_curves(history, preds['test']['y'], preds['test']['prob'], metrics['test']['pr_auc'],

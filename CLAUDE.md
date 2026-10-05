@@ -141,6 +141,13 @@ them here. Rules that apply when implementing:
   overfit for GIN, mildly for PNA and the Transformer, without RWPE).
 - Known caveat, written with the results: val/test RWPE also reflects edges later than the
   seed edge — the same caveat as neighbour sampling.
+- **GFP tuned (decided 4 Oct):** the 64-column sheet replaces the V0 block at load time
+  (`GFP_VARIANT`, `NODE_ENC` stays `none`); only the edge projections and the readout's first
+  Linear widen (337 → 340 inputs), `invariant_params` unchanged. 8 runs = configs 5 and 4 of
+  every operator from `GFP_fixed_architecture.ipynb`, each judged against the family's own V0
+  run on validation F1 (gap < 0.02 = tie; test never used to choose). A win stays a separate
+  finding; V0 remains the default sheet for every other experiment until I decide otherwise.
+  Always comment on overfitting from the curves, especially config 4.
 
 ## 4. Evaluation protocol — never deviate
 
@@ -194,16 +201,17 @@ without an explicit request. Known invariants:
 - **Bank target encoding:** train-window rates frozen for val/test; strictly-earlier-only for
   train rows; smoothing m = 200.
 - **Normalisation** fit on train only (`standard_scaler.pkl`). The data-tuned GFP sheet
-  (`Data/gfp_variants/tuned.npy`, 64 columns: 48 h windows, cycles ≤ 12, bins [2, 4, 6, 8]) is
-  swappable into `edge_attr[:, 20:81]` after the same train-fit recipe (the "GFP tuned to the
-  data" item in `EXPERIMENTS.md`).
+  (`Data/gfp_variants/tuned.npy`, 64 columns: 48 h windows, cycles ≤ 12, bins [2, 4, 6, 8])
+  replaces the GFP block of `edge_attr` at load time (`GFP_VARIANT = tuned` in
+  `gnn_core.load_graphs`: same train-fit recipe via `normalise_gfp_sheet()`, width 20 + 64 = 84;
+  the graph files never change; the "GFP tuned to the data" item in `EXPERIMENTS.md`).
 - Any change that could let future information reach training is a bug. Flag it explicitly.
   If results look too good (big jumps, val ≫ train, near-perfect scores), suspect leakage first.
 
 ## 6. Run artifacts & naming
 
 Every completed run writes to `Outputs/<FAMILY>/<run_name>/` (node-encoding runs:
-`Outputs/RWPE/<FAMILY>/<run_name>/`):
+`Outputs/RWPE/<FAMILY>/<run_name>/`; GFP-variant runs: `Outputs/GFP_TUNED/<FAMILY>/<run_name>/`):
 `results.json`, `history.csv`, `curves.png`, `best.pt`, `predictions.csv`; plus
 `batch_summary.csv` per batch (all columns of section 4, every split).
 
@@ -252,6 +260,10 @@ mirror both to their Notion pages. Mark superseded rows `SUPERSEDED`, never dele
   operator in one session (so one executed notebook holds all their training logs); its
   config entries carry `operator` and `node_enc`, its runs land in `Outputs/RWPE/<FAMILY>/<run>/` with `batch_summary_rwpe.csv`
   per family, separate from the operator batches in `Outputs/<FAMILY>/`.
+  Third exception: `GFP_fixed_architecture.ipynb` does the same for the GFP-variant runs: config
+  entries carry `operator` and `gfp_variant`, the graphs are loaded once with
+  `GFP_VARIANT = tuned` (one sheet per batch), runs land in `Outputs/GFP_TUNED/<FAMILY>/<run>/`
+  with `batch_summary_gfp_tuned.csv` per family.
 - **Kaggle environment cell — keep verbatim in every operator notebook.** The pinned
   PyTorch / PyG stack below is known to work on Kaggle GPU; do not "simplify", reorder, or
   change versions without my OK (a mismatched torch / torch-scatter build is the usual cause of
