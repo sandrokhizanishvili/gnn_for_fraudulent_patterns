@@ -28,9 +28,9 @@ Mirrored on the Notion experiments page (kept in sync).
 - [x] RWPE stage 1 (8 runs, `rwpe16`) trained on Kaggle, 5 Oct; results in `Progress_Report.md`
       §7.5 (ties for GIN, PNA and the Transformer; GAT-5 + RWPE just above the tie band → one
       k = 8 run on GAT config 5 next, section 3 "RWPE runs")
-- [ ] GFP `tuned` sheet: `GFP_VARIANT` knob in `gnn_core.py` (the sheet is swapped into the GFP
-      block at load time, graph files untouched), `GFP_fixed_architecture.ipynb` ready — the 8
-      runs of section 3 "GFP tuned runs" wait for Kaggle
+- [x] GFP `tuned` batch (8 runs, `GFP_VARIANT = tuned`) trained on Kaggle, 5–6 Oct; results in
+      `Progress_Report.md` §7.6 (ties for GIN, PNA, the Transformer and GAT-4; GAT-5 + tuned the
+      only run above the tie band; V0 stays the default sheet, section 3 "GFP tuned runs")
 
 ---
 
@@ -44,12 +44,13 @@ laundering). Each transaction is an edge, each account a node.
       the transaction (cycles, fan-in/out, scatter-gather, degree statistics), IBM's Graph Feature
       Preprocessor with the paper's windows; simple cycles capped at length 6 (paper: 10)
 - [x] **Node features** (6 per account) — account entity type
-- [ ] **GFP tuned to the data** (64 per transaction) — one alternative sheet, `tuned`: 48 h windows
+- [x] **GFP tuned to the data** (64 per transaction) — one alternative sheet, `tuned`: 48 h windows
       (scatter-gather 12 h), simple cycles up to 12 hops, four pattern bins [2, 4, 6, 8]; chosen from
       the durations and sizes of HI-Small's 370 annotated attempts (`GFP_experiments.ipynb`,
-      `Progress_Report.md` §3). Computed; runs: configs 5 and 4 of every operator with
+      `Progress_Report.md` §3). Runs: configs 5 and 4 of every operator with
       `GFP_VARIANT = tuned` (section 3, "GFP tuned runs"), each compared with the family's own V0
-      run on validation F1 (gap < 0.02 = tie)
+      run on validation F1 (gap < 0.02 = tie). Done (§7.6): seven ties, one gain (GAT-5); V0 stays
+      the default sheet
 - [ ] **RWPE node encoding** (16 per account, k = 16 first) — directed random-walk return
       probabilities (walks follow the money: non-zero = the account sits on a directed money
       cycle of length ≤ 16); one vector per snapshot from
@@ -153,14 +154,14 @@ GFP sheet in place of V0 (`GFP_VARIANT = tuned`: the 64 columns are normalised l
 into the GFP block at load time, `edge_attr` 84 wide, graph files untouched; `NODE_ENC = none`,
 one factor at a time). Summary file: `Outputs/GFP_TUNED/<FAMILY>/batch_summary_gfp_tuned.csv`.*
 
-- [ ] **GIN-5 + tuned** · base / base+GFP · tuned → `Outputs/GFP_TUNED/GIN/gin_mp-base_readout-full_dir-in_gfp-tuned/`
-- [ ] **GIN-4 + tuned** · base+GFP / base+GFP · tuned → `Outputs/GFP_TUNED/GIN/gin_mp-full_readout-full_dir-in_gfp-tuned/`
-- [ ] **GAT-5 + tuned** · base / base+GFP · tuned → `Outputs/GFP_TUNED/GAT/gat_mp-base_readout-full_dir-in_gfp-tuned/`
-- [ ] **GAT-4 + tuned** · base+GFP / base+GFP · tuned → `Outputs/GFP_TUNED/GAT/gat_mp-full_readout-full_dir-in_gfp-tuned/`
-- [ ] **PNA-5 + tuned** · base / base+GFP · tuned → `Outputs/GFP_TUNED/PNA/pna_mp-base_readout-full_dir-in_gfp-tuned/`
-- [ ] **PNA-4 + tuned** · base+GFP / base+GFP · tuned → `Outputs/GFP_TUNED/PNA/pna_mp-full_readout-full_dir-in_gfp-tuned/`
-- [ ] **TR-5 + tuned** · base / base+GFP · tuned → `Outputs/GFP_TUNED/TRANSFORMER/transformer_mp-base_readout-full_dir-in_gfp-tuned/`
-- [ ] **TR-4 + tuned** · base+GFP / base+GFP · tuned → `Outputs/GFP_TUNED/TRANSFORMER/transformer_mp-full_readout-full_dir-in_gfp-tuned/`
+- [x] **GIN-5 + tuned** · base / base+GFP · tuned → `Outputs/GFP_TUNED/GIN/gin_mp-base_readout-full_dir-in_gfp-tuned/`
+- [x] **GIN-4 + tuned** · base+GFP / base+GFP · tuned → `Outputs/GFP_TUNED/GIN/gin_mp-full_readout-full_dir-in_gfp-tuned/`
+- [x] **GAT-5 + tuned** · base / base+GFP · tuned → `Outputs/GFP_TUNED/GAT/gat_mp-base_readout-full_dir-in_gfp-tuned/`
+- [x] **GAT-4 + tuned** · base+GFP / base+GFP · tuned → `Outputs/GFP_TUNED/GAT/gat_mp-full_readout-full_dir-in_gfp-tuned/`
+- [x] **PNA-5 + tuned** · base / base+GFP · tuned → `Outputs/GFP_TUNED/PNA/pna_mp-base_readout-full_dir-in_gfp-tuned/`
+- [x] **PNA-4 + tuned** · base+GFP / base+GFP · tuned → `Outputs/GFP_TUNED/PNA/pna_mp-full_readout-full_dir-in_gfp-tuned/`
+- [x] **TR-5 + tuned** · base / base+GFP · tuned → `Outputs/GFP_TUNED/TRANSFORMER/transformer_mp-base_readout-full_dir-in_gfp-tuned/`
+- [x] **TR-4 + tuned** · base+GFP / base+GFP · tuned → `Outputs/GFP_TUNED/TRANSFORMER/transformer_mp-full_readout-full_dir-in_gfp-tuned/`
 
 **Decision rule, fixed in advance:** each run is compared with the family's own V0 config 5 / 4
 above on validation F1 only (gap < 0.02 = tie); test is never used to choose. If tuned wins on
@@ -195,21 +196,24 @@ for GIN, mildly for PNA and the Transformer, on V0).
 
 *Newest first. Unticked = in progress · ticked = finished and synced.*
 
-- [ ] **4 Oct** — `GFP_VARIANT` knob in `gnn_core.py` (v0 | tuned: the tuned sheet is normalised
+- [x] **5–6 Oct** — GFP tuned batch: all eight runs (configs 5 and 4 × four operators,
+      `GFP_VARIANT = tuned`) in one Kaggle session of `GFP_fixed_architecture.ipynb`; results,
+      curves and predictions in `Outputs/GFP_TUNED/`, sections and comparison tables in
+      `Progress_Report.md` §7.6: seven ties, GAT-5 + tuned the only run above the tie band
+      (+0.042 validation F1); V0 stays the default sheet
+- [x] **4 Oct** — `GFP_VARIANT` knob in `gnn_core.py` (v0 | tuned: the tuned sheet is normalised
       like V0 and swapped into the GFP block at load time, `edge_attr` 81 → 84, only the edge
       projections and the readout input widen, `invariant_params` unchanged);
-      `GFP_fixed_architecture.ipynb` ready with the 8 configs (5 and 4 of every operator), batch
-      not yet run; decision rule in section 3 "GFP tuned runs"
-- [ ] **4 Oct** — GFP `tuned` sheet (64 columns) computed in a rewritten `GFP_experiments.ipynb`;
+      `GFP_fixed_architecture.ipynb` ready with the 8 configs (5 and 4 of every operator);
+      decision rule in section 3 "GFP tuned runs"
+- [x] **4 Oct** — GFP `tuned` sheet (64 columns) computed in a rewritten `GFP_experiments.ipynb`;
       the four single-factor sheets of August (win48 / win120 / lc10 / rich) removed as
       uninformative; the "52 % / 84 % of hop gaps" claim did not reproduce and was replaced by the
       recomputed per-typology durations (`Progress_Report.md` §3); V0 relabelled "paper, cycles ≤ 6";
       `Data_checks.ipynb` §6 now checks the tuned sheet (59 checks, all pass)
 - [x] **5 Oct** — RWPE stage 1: all eight runs (configs 5 and 4 × four operators, `rwpe16`) in one
       Kaggle session of `RWPE_fixed_architecture.ipynb`; results, curves and predictions in
-      `Outputs/RWPE/`, sections and comparison tables in `Progress_Report.md` §7.5; the GIN pair
-      of the 4 Oct preliminary session retrained with the same seed (validation agreed, test did
-      not — seed noise, §7.5.9), preliminary files superseded
+      `Outputs/RWPE/`, sections and comparison tables in `Progress_Report.md` §7.5
 - [x] **4 Oct** — RWPE node encoding: `rwpe_compute.py` + `RWPE_encoding.ipynb` (k = 8 and
       k = 16 per snapshot, self-loops dropped, checked against PyG `AddRandomWalkPE`,
       `Data/rwpe/`); `NODE_ENC` knob in `gnn_core.py` (only `node_proj` widens);

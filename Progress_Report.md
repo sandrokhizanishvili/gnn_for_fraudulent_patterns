@@ -102,8 +102,8 @@ computed causally in batches of 128 (see the pitfalls below). Two configurations
 the paper (Altman et al. 2023, Appendix D) with one deliberate change: simple cycles are capped at
 length 6 instead of the paper's 10, to keep GFP tractable on 5 M edges; it feeds every result so far.
 **tuned** changes the windows, the cycle length and the bins to what HI-Small's own laundering
-patterns ask for (`GFP_experiments.ipynb`); it is computed (`Data/gfp_variants/tuned.npy`) but not
-yet trained on.
+patterns ask for (`GFP_experiments.ipynb`); it was trained on configs 5 and 4 of every operator
+(§7.6): seven ties and one gain (GATv2 config 5), so V0 stays the default sheet.
 
 What the paper fixes: batch size 128, 6 h window for scatter-gather, 24 h for everything else,
 simple cycles up to length 10, vertex statistics on amount and timestamp. What it leaves open
@@ -134,16 +134,17 @@ what matters is how long a whole attempt lasts.
 | Hop gap along chains (cycles + random walks) | median 8.5 h; ≤ 24 h: 83 %, ≤ 48 h: 96 % | 83 % of hops | 96 % |
 
 120 h would cover every annotated ring, fan and scatter-gather; it was not computed (cost, and
-noise from coincidental long patterns) and is the follow-up if tuned helps.
+noise from coincidental long patterns); after §7.6 it is worth computing only if the GATv2 gain
+survives the seed cross-check.
 
 **What the tuned sheet shows before any training** (`GFP_experiments.ipynb` §6–7): same
 causality as V0 (99.02 % of first-ever transactions see only themselves, worst case degree 9);
 row by row every tuned count is ≥ V0's (rows aligned; 3 of 5 M temporal-cycle rows differ, a
 snapml search quirk); the strongest label correlation rises from +0.064 (V0, 2–3-hop cycles) to
-+0.088 (tuned, 4–6-hop cycles); scatter-gather columns stay at ≈ 0 in both. Next step: configs 5
++0.088 (tuned, 4–5-hop cycles); scatter-gather columns stay at ≈ 0 in both. Trained: configs 5
 and 4 of every operator with tuned in place of V0 (`GFP_fixed_architecture.ipynb`; the sheet is
 swapped into the GFP block at load time, nothing else changed; rule and run list in
-`EXPERIMENTS.md` §3); results will go to §7.6.
+`EXPERIMENTS.md` §3); results and verdict in §7.6.
 
 **Two snapml pitfalls, found by our checks and fixed:**
 
@@ -950,7 +951,6 @@ Best epoch 16 · threshold 0.650 · params 118,275 · 63 s / epoch · `Outputs/R
 
 - Tie with GIN-5 on validation (0.598 vs 0.609, −0.011); on test 0.486 vs 0.525, lower on every metric except precision (0.765 vs 0.678), because the threshold moved up to 0.65 and recall fell to 0.356.
 - Mild overfitting that GIN-5 did not have: validation loss is lowest at epoch 7 and drifts up to 0.019 by epoch 20 while train loss keeps falling; train PR-AUC passes validation after epoch 13 (0.541 vs 0.524 at the end).
-- The same configuration run on 4 Oct with the same seed gave validation 0.600 and test 0.524: validation agrees within 0.002, test moved by 0.04 — the test spread of a single seed (§7.5.9).
 
 ![GIN-5 + RWPE — loss, F1, PR-AUC per epoch (dashed = saved checkpoint), test PR curve](Outputs/RWPE/GIN/gin_mp-base_readout-full_dir-in_enc-rwpe16/curves.png)
 
@@ -1143,19 +1143,241 @@ Validation F1 decides (gap < 0.02 = tie); test shown for completeness.
 | TR-4 + RWPE | val | 0.636 | 0.846 | 0.509 | 0.583 | 0.983 | 0.0184 | 0.863 |
 | TR-4 + RWPE | test | 0.614 | 0.817 | 0.492 | 0.575 | 0.985 | 0.0200 | 0.890 |
 
-**The GIN pair run twice** (same configuration and seed, two Kaggle sessions):
-
-| Run (seed 42) | val F1 4 Oct | val F1 5 Oct | test F1 4 Oct | test F1 5 Oct | best epoch 4 Oct / 5 Oct |
-|---|---|---|---|---|---|
-| GIN-5 + RWPE | 0.600 | 0.598 | 0.524 | 0.486 | 14 / 16 |
-| GIN-4 + RWPE | 0.589 | 0.594 | 0.501 | 0.519 | 16 / 7 |
-
 - **Rule outcome:** seven of the eight runs are ties (validation gaps of 0.011 or less). GAT-5 + RWPE is +0.022, just over the 0.02 line, so by the rule fixed in advance one k = 8 run follows on GAT config 5 (`rwpe8`, about 30 min); k = 8 is kept only if it ties with k = 16. For GIN, PNA and the Transformer RWPE is a null result and nothing further runs.
 - **Reading:** this matches §2 — the directed RWPE is non-zero for under 2 % of accounts, and GFP at the readout already encodes the cycles those accounts sit on. The operators that extract the most from the graph on their own (PNA, Transformer) gain nothing; GATv2, the operator that profits least from edge features (§7.2), is the only one with a hint of a gain, and it came as higher recall at a lower threshold rather than better ranking (validation PR-AUC 0.515 vs 0.498).
 - **Overfitting is unchanged by RWPE:** config 4 overfits for GIN, PNA and the Transformer with or without it (the checkpoints move earlier, to epochs 7, 9 and 11), config 5 does not, and GATv2 never does. The one exception is GIN-5 + RWPE, which shows a mild drift GIN-5 lacked.
-- **Seed noise, measured:** the GIN pair was trained twice with the same seed (4 Oct preliminary session, 5 Oct full session; GPU non-determinism). Validation F1 moved by at most 0.005, test F1 by up to 0.04 — the 0.02 validation tie band holds, and test gaps under about 0.04 mean nothing for a single seed. The 4 Oct files are superseded (kept in git history, commit 4fcb616).
 - **Caveat:** on val/test the RWPE of an account also reflects edges later than the seed edge (§2); the leakage check showed that only about 40 % of the laundering edges flagged by a non-zero RWPE stay flagged without those later edges, so the snapshot RWPE is if anything optimistic — which makes the null result the safer conclusion.
 - **Runtime (from the history logs):** 21–77 min per run, 5.9 h for the batch; PNA-4 + RWPE slowest at 230 s per epoch, GIN-5 + RWPE fastest at 63 s.
+
+### 7.6 GFP tuned to the data (8 runs, 5–6 Oct)
+
+Does the data-tuned GFP sheet (§3: 48 h windows, simple cycles up to 12 hops, four pattern bins, 64 columns) beat the paper's V0 sheet when everything else is held fixed? Each run repeats one finished configuration with `GFP_VARIANT = tuned`: the 64 tuned columns replace the 61 V0 columns of `edge_attr` at load time (84 wide, graph files untouched, `NODE_ENC = none`), so only the edge projections and the readout's first Linear widen (+384 parameters for config 5, +1,152 for config 4); `invariant_params` stays at the family value (GIN 67,587 · GATv2 67,585 · PNA 427,265 · Transformer 133,121, verified in every row). All eight runs come from one Kaggle session of `GFP_fixed_architecture.ipynb` (6.2 h); artifacts in `Outputs/GFP_TUNED/<FAMILY>/<run>/`. Decided on validation F1 only against the family's own V0 run, gaps under 0.02 are ties; test is shown, never used to choose.
+
+**What is tuned, what is not, and why.** Nine of the twenty GFP parameters change; the reasons come from the 370 annotated attempts in `HI-Small_Patterns.txt`, measured in `GFP_experiments.ipynb` §1 (the numbers are in the §3 table). How they were measured: the file's `BEGIN … END` blocks list every transaction of each attempt, so each attempt's duration is its last minus its first timestamp, its ring length the number of hops, its fan width the number of distinct counterparties, and a hop gap the time between two consecutive hops where the receiver of one is the sender of the next; a window "covers" an attempt when the whole duration fits inside it. GFP counts a pattern on its closing transaction only if every edge of the pattern is still inside the window, so what a window must cover is the whole duration of an attempt, not one transaction.
+
+| Parameter | V0 (paper) | tuned | Why this value | Evidence |
+|---|---|---|---|---|
+| Graph memory (`time_window`) | 24 h | 48 h | snapml drops edges older than this from its graph, so no pattern window can exceed it; raised together with the pattern windows | measured: with `time_window` left at 24 h, 48 h cycle features came out identical to 24 h ones |
+| Temporal-cycle and simple-cycle windows | 24 h | 48 h | 54 annotated rings, median 72 h: 9 % fit whole in 24 h, 22 % in 48 h, 100 % in 120 h; the hop gap along chains (median 8.5 h) fits in 24 h for 83 % of hops and in 48 h for 96 % | measured; 120 h not computed (cost, and the untested hypothesis that coincidental long patterns add noise) |
+| Vertex-statistics window | 24 h | 48 h | kept equal to the graph memory; fan-in / fan-out attempts fit whole in 24 h for 15 % / 21 %, in 48 h for 22 % / 23 % | measured, small effect |
+| Scatter-gather window | 6 h | 12 h | 44 scatter-gather attempts, median 89 h: 0 % fit in 6 h, 2 % in 12 h (11 % in 48 h, 100 % in 120 h); the paper's value was doubled and recorded as a known limitation | choice without measured support: no evidence that 12 h is the right value; the scatter-gather columns have ≈ 0 label correlation with either window |
+| Simple-cycle maximum length | 6 (paper: 10) | 12 | the 54 rings have 2–12 hops: 37 % are longer than 6, five are longer than 10, none longer than 12 | measured: 12 covers every annotated ring |
+| Pattern bins (all three pattern groups) | [2, 3, 5] → 3 bins: 2–3, 3–5, 5+ | [2, 4, 6, 8] → 4 bins: 2–3, 4–5, 6–7, 8+ | ring lengths run to 12 and fan widths have median 7.5, p75 12, max 16, so V0's open "5+" bin holds most of them; four bins separate 4–5-hop from 6–7-hop and longer patterns | measured sizes; whether the finer bins help is what the runs test |
+| Batch size, statistics set, vertex-statistics columns, fan / degree histograms | 128 · 8 statistics · amount + timestamp · off | unchanged | one thing changed at a time: windows, cycle length and bins only | — |
+| Features per transaction | 61 (3 × 3 bins + 4 × 13 statistics) | 64 (3 × 4 bins + 4 × 13 statistics) | follows from the bins | — |
+
+- **What the sheet gained before training** (`GFP_experiments.ipynb` §6–7, measured): the strongest label correlation (Pearson, each column against the 0/1 label over all 5.08 M rows) moved from V0's 2–3-hop cycle bin (+0.064) to tuned's 4–5-hop bin (+0.088, temporal cycles +0.080); the new 6–7-hop and 8+ bins stay at ≈ 0 (+0.007, 0.000 for temporal cycles; +0.003, −0.000 for simple cycles). So the longer windows mainly sharpened the mid-length cycle counts; the long rings that motivated length 12 almost never show up as a closing transaction with a label.
+- **What this means for the null result** (hypothesis, not tested): even at 48 h only 22 % of rings and 11 % of scatter-gather attempts are visible whole, so most annotated patterns still never close inside the window for either sheet; the 120 h sheet would be the test of this reading, and §7.6.9 says when it is worth running.
+
+#### 7.6.1 GIN-5 + tuned · base / base+GFP · tuned
+
+Best epoch 13 · threshold 0.722 · params 116,611 · 70 s / epoch · `Outputs/GFP_TUNED/GIN/gin_mp-base_readout-full_dir-in_gfp-tuned/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.560 | 0.747 | 0.447 | 0.513 | 0.989 | 0.0137 | 0.908 |
+| val | 0.604 | 0.828 | 0.476 | 0.532 | 0.983 | 0.0184 | 0.862 |
+| test | **0.517** | 0.757 | 0.393 | 0.452 | 0.976 | 0.0188 | 0.837 |
+
+- Tie with GIN-5 on validation (0.604 vs 0.609) and on test (0.517 vs 0.525); the threshold moved up to 0.72 (GIN-5: 0.50), so test precision is higher (0.757 vs 0.678) and recall lower (0.393 vs 0.429); PR-AUC slightly lower on validation and test (0.532 vs 0.549, 0.452 vs 0.484).
+- Mild overfitting that GIN-5 did not have: validation loss is lowest at epoch 8 (0.017) and drifts to 0.020 by epoch 20 while train loss keeps falling; train PR-AUC passes validation from epoch 13 (0.537 vs 0.523 at the end). Validation F1 is noisy (a dip to 0.44 at epoch 6) and flat at 0.58–0.60 from epoch 7.
+
+![GIN-5 + tuned — loss, F1, PR-AUC per epoch (dashed = saved checkpoint), test PR curve](Outputs/GFP_TUNED/GIN/gin_mp-base_readout-full_dir-in_gfp-tuned/curves.png)
+
+#### 7.6.2 GIN-4 + tuned · base+GFP / base+GFP · tuned
+
+Best epoch 10 · threshold 0.533 · params 132,995 · 133 s / epoch · `Outputs/GFP_TUNED/GIN/gin_mp-full_readout-full_dir-in_gfp-tuned/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.551 | 0.658 | 0.473 | 0.536 | 0.990 | 0.0138 | 0.912 |
+| val | 0.594 | 0.824 | 0.464 | 0.529 | 0.979 | 0.0179 | 0.838 |
+| test | **0.494** | 0.738 | 0.372 | 0.454 | 0.971 | 0.0183 | 0.811 |
+
+- Tie with GIN-4 on validation (0.594 vs 0.598); test 0.494 vs 0.512 (−0.017, inside single-seed noise), with the same threshold region (0.53 vs 0.57) and precision within 0.01.
+- Overfits exactly like GIN-4: validation loss is flat at 0.020 up to epoch 12 and climbs to 0.027 by epoch 20, train PR-AUC reaches 0.61 against 0.47 on validation, and validation F1 falls from 0.594 at the checkpoint to 0.54 at the end. The checkpoint at epoch 10 (the same epoch as GIN-4) was taken before the damage. The tuned sheet neither causes nor cures the overfitting of this configuration.
+
+![GIN-4 + tuned — loss, F1, PR-AUC per epoch (dashed = saved checkpoint), test PR curve](Outputs/GFP_TUNED/GIN/gin_mp-full_readout-full_dir-in_gfp-tuned/curves.png)
+
+#### 7.6.3 GAT-5 + tuned · base / base+GFP · tuned
+
+Best epoch 16 · threshold 0.492 · params 116,353 · 88 s / epoch · `Outputs/GFP_TUNED/GAT/gat_mp-base_readout-full_dir-in_gfp-tuned/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.457 | 0.506 | 0.418 | 0.439 | 0.986 | 0.0134 | 0.887 |
+| val | 0.592 | 0.805 | 0.469 | 0.535 | 0.985 | 0.0189 | 0.885 |
+| test | **0.516** | 0.675 | 0.418 | 0.475 | 0.981 | 0.0194 | 0.863 |
+
+- The only run above the tie band: validation F1 0.592 vs 0.550 for GAT-5 (+0.042), and the gain is in the ranking too (validation PR-AUC 0.535 vs 0.498, Recall@5 % 0.885 vs 0.866). On test 0.516 vs 0.500 (+0.016), PR-AUC 0.475 vs 0.451, with recall up (0.418 vs 0.383) and precision down (0.675 vs 0.720) at a lower threshold (0.49 vs 0.60).
+- No overfitting, like every GATv2 run: validation loss is lowest at the checkpoint (epoch 16), train PR-AUC (0.44) stays below validation (0.53) throughout. Converged by epoch 16, whereas GAT-5 was still improving at epoch 20, so part of the gap may be convergence rather than the sheet — the same reservation as for GAT-5 + RWPE (§7.5.3).
+
+![GAT-5 + tuned — loss, F1, PR-AUC per epoch (dashed = saved checkpoint), test PR curve](Outputs/GFP_TUNED/GAT/gat_mp-base_readout-full_dir-in_gfp-tuned/curves.png)
+
+#### 7.6.4 GAT-4 + tuned · base+GFP / base+GFP · tuned
+
+Best epoch 14 · threshold 0.594 · params 132,737 · 157 s / epoch · `Outputs/GFP_TUNED/GAT/gat_mp-full_readout-full_dir-in_gfp-tuned/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.496 | 0.588 | 0.429 | 0.460 | 0.987 | 0.0135 | 0.893 |
+| val | 0.587 | 0.828 | 0.455 | 0.530 | 0.984 | 0.0188 | 0.882 |
+| test | **0.522** | 0.729 | 0.407 | 0.477 | 0.980 | 0.0191 | 0.847 |
+
+- Tie with GAT-4 by the rule, but at its edge: validation F1 0.587 vs 0.570 (+0.018), validation PR-AUC 0.530 vs 0.512. On test 0.522 vs 0.488 (+0.034, the largest test gap of the batch, single seed), with precision up (0.729 vs 0.611) at the same recall (0.407 vs 0.406).
+- No overfitting: validation loss lowest at the checkpoint (epoch 14), train PR-AUC below validation to the end (0.47 vs 0.52). Checkpoint at epoch 14 against 19 for GAT-4.
+
+![GAT-4 + tuned — loss, F1, PR-AUC per epoch (dashed = saved checkpoint), test PR curve](Outputs/GFP_TUNED/GAT/gat_mp-full_readout-full_dir-in_gfp-tuned/curves.png)
+
+#### 7.6.5 PNA-5 + tuned · base / base+GFP · tuned
+
+Best epoch 12 · threshold 0.561 · params 607,873 · 195 s / epoch · `Outputs/GFP_TUNED/PNA/pna_mp-base_readout-full_dir-in_gfp-tuned/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.564 | 0.706 | 0.470 | 0.545 | 0.990 | 0.0139 | 0.920 |
+| val | 0.653 | 0.818 | 0.543 | 0.605 | 0.985 | 0.0186 | 0.872 |
+| test | **0.613** | 0.775 | 0.507 | 0.565 | 0.985 | 0.0201 | 0.892 |
+
+- Tie with PNA-5 everywhere: validation 0.653 vs 0.648, test 0.613 vs 0.611, Recall@5 % identical (0.892). The threshold is much lower (0.56 vs 0.71), so recall is up (0.507 vs 0.494) and precision down (0.775 vs 0.800); PR-AUC slightly lower (0.565 vs 0.574 on test).
+- Clean curves: validation loss keeps falling to epoch 18, train PR-AUC below validation to the end (0.583 vs 0.596). Validation F1 is noisy (dips at epochs 6 and 14) and the checkpoint sits at epoch 12, three epochs earlier than PNA-5's.
+
+![PNA-5 + tuned — loss, F1, PR-AUC per epoch (dashed = saved checkpoint), test PR curve](Outputs/GFP_TUNED/PNA/pna_mp-base_readout-full_dir-in_gfp-tuned/curves.png)
+
+#### 7.6.6 PNA-4 + tuned · base+GFP / base+GFP · tuned
+
+Best epoch 10 · threshold 0.583 · params 624,257 · 241 s / epoch · `Outputs/GFP_TUNED/PNA/pna_mp-full_readout-full_dir-in_gfp-tuned/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.564 | 0.730 | 0.459 | 0.534 | 0.989 | 0.0137 | 0.907 |
+| val | 0.646 | 0.853 | 0.519 | 0.593 | 0.986 | 0.0188 | 0.880 |
+| test | **0.600** | 0.844 | 0.465 | 0.561 | 0.985 | 0.0201 | 0.892 |
+
+- Tie with PNA-4 (validation 0.646 vs 0.648; test 0.600 vs 0.617, −0.017, inside noise); precision within 0.01 (0.844 vs 0.856), recall lower (0.465 vs 0.482) at a lower threshold (0.58 vs 0.70).
+- Mild overfitting as in PNA-4: validation loss lowest at epoch 10 (0.015) and up to 0.020 by epoch 20; train PR-AUC crosses validation at epoch 15 and ends 0.61 vs 0.57; validation F1 drifts from 0.646 at the checkpoint to 0.62. The checkpoint sits at epoch 10, five epochs earlier than PNA-4's.
+
+![PNA-4 + tuned — loss, F1, PR-AUC per epoch (dashed = saved checkpoint), test PR curve](Outputs/GFP_TUNED/PNA/pna_mp-full_readout-full_dir-in_gfp-tuned/curves.png)
+
+#### 7.6.7 TR-5 + tuned · base / base+GFP · tuned
+
+Best epoch 15 · threshold 0.637 · params 181,889 · 87 s / epoch · `Outputs/GFP_TUNED/TRANSFORMER/transformer_mp-base_readout-full_dir-in_gfp-tuned/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.577 | 0.776 | 0.460 | 0.554 | 0.990 | 0.0138 | 0.918 |
+| val | 0.639 | 0.854 | 0.510 | 0.592 | 0.985 | 0.0187 | 0.876 |
+| test | **0.607** | 0.799 | 0.490 | 0.574 | 0.986 | 0.0200 | 0.886 |
+
+- Tie with TR-5 (validation 0.639 vs 0.629, +0.010; test 0.607 vs 0.598); every threshold-free metric is a little higher (validation PR-AUC 0.592 vs 0.577, test PR-AUC 0.574 vs 0.553, test Recall@5 % 0.886 vs 0.871), precision lower (0.799 vs 0.832) and recall higher (0.490 vs 0.466) at a lower threshold (0.64 vs 0.68).
+- No overfitting: validation loss flat from epoch 8, train PR-AUC below validation throughout (0.563 vs 0.586); checkpoint at epoch 15, one epoch later than TR-5.
+
+![TR-5 + tuned — loss, F1, PR-AUC per epoch (dashed = saved checkpoint), test PR curve](Outputs/GFP_TUNED/TRANSFORMER/transformer_mp-base_readout-full_dir-in_gfp-tuned/curves.png)
+
+#### 7.6.8 TR-4 + tuned · base+GFP / base+GFP · tuned
+
+Best epoch 10 · threshold 0.678 · params 198,273 · 145 s / epoch · `Outputs/GFP_TUNED/TRANSFORMER/transformer_mp-full_readout-full_dir-in_gfp-tuned/`
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.579 | 0.754 | 0.470 | 0.556 | 0.991 | 0.0139 | 0.923 |
+| val | 0.642 | 0.862 | 0.512 | 0.591 | 0.983 | 0.0185 | 0.866 |
+| test | **0.604** | 0.796 | 0.487 | 0.564 | 0.982 | 0.0195 | 0.865 |
+
+- Tie with TR-4 on every metric: validation 0.642 vs 0.644, test 0.604 vs 0.602, precision 0.796 vs 0.788, recall identical (0.487), PR-AUC within 0.01.
+- Mild overfitting as in TR-4: validation loss lowest at epoch 10 (0.0165) and up to 0.018 by epoch 20, train PR-AUC crosses validation at epoch 15 and ends 0.60 vs 0.59; validation F1 stays flat at 0.63–0.64, so the checkpoint at epoch 10 (TR-4: 15) is unaffected.
+
+![TR-4 + tuned — loss, F1, PR-AUC per epoch (dashed = saved checkpoint), test PR curve](Outputs/GFP_TUNED/TRANSFORMER/transformer_mp-full_readout-full_dir-in_gfp-tuned/curves.png)
+
+#### 7.6.9 V0 vs tuned — verdict
+
+Validation F1 decides (gap < 0.02 = tie); test shown for completeness.
+
+| Run | F1 val V0 | F1 val tuned | Δ val | Verdict (rule) | F1 test V0 | F1 test tuned | Δ test | PR-AUC val V0 / tuned | threshold V0 / tuned | best epoch V0 / tuned | Overfitting V0 / tuned |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| GIN-5 | 0.609 | 0.604 | −0.004 | tie | 0.525 | 0.517 | −0.008 | 0.549 / 0.532 | 0.50 / 0.72 | 8 / 13 | no / mild |
+| GIN-4 | 0.598 | 0.594 | −0.004 | tie | 0.512 | 0.494 | −0.017 | 0.538 / 0.529 | 0.57 / 0.53 | 10 / 10 | yes / yes |
+| GAT-5 | 0.550 | 0.592 | +0.042 | tuned better | 0.500 | 0.516 | +0.016 | 0.498 / 0.535 | 0.60 / 0.49 | 20 / 16 | no / no |
+| GAT-4 | 0.570 | 0.587 | +0.018 | tie (at the edge) | 0.488 | 0.522 | +0.034 | 0.512 / 0.530 | 0.51 / 0.59 | 19 / 14 | no / no |
+| PNA-5 | 0.648 | 0.653 | +0.005 | tie | 0.611 | 0.613 | +0.002 | 0.610 / 0.605 | 0.71 / 0.56 | 15 / 12 | no / no |
+| PNA-4 | 0.648 | 0.646 | −0.003 | tie | 0.617 | 0.600 | −0.017 | 0.606 / 0.593 | 0.70 / 0.58 | 15 / 10 | mild / mild |
+| TR-5 | 0.629 | 0.639 | +0.010 | tie | 0.598 | 0.607 | +0.010 | 0.577 / 0.592 | 0.68 / 0.64 | 14 / 15 | no / no |
+| TR-4 | 0.644 | 0.642 | −0.002 | tie | 0.602 | 0.604 | +0.002 | 0.588 / 0.591 | 0.70 / 0.68 | 15 / 10 | mild / mild |
+
+**GIN: V0 vs tuned, all metrics, all splits**
+
+| Run | Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|---|
+| GIN-5 | train | 0.534 | 0.666 | 0.445 | 0.482 | 0.986 | 0.0134 | 0.886 |
+| GIN-5 | val | 0.609 | 0.820 | 0.484 | 0.549 | 0.982 | 0.0184 | 0.864 |
+| GIN-5 | test | 0.525 | 0.678 | 0.429 | 0.484 | 0.980 | 0.0195 | 0.867 |
+| GIN-5 + tuned | train | 0.560 | 0.747 | 0.447 | 0.513 | 0.989 | 0.0137 | 0.908 |
+| GIN-5 + tuned | val | 0.604 | 0.828 | 0.476 | 0.532 | 0.983 | 0.0184 | 0.862 |
+| GIN-5 + tuned | test | 0.517 | 0.757 | 0.393 | 0.452 | 0.976 | 0.0188 | 0.837 |
+| GIN-4 | train | 0.563 | 0.692 | 0.475 | 0.546 | 0.991 | 0.0140 | 0.928 |
+| GIN-4 | val | 0.598 | 0.831 | 0.467 | 0.538 | 0.979 | 0.0178 | 0.837 |
+| GIN-4 | test | 0.512 | 0.743 | 0.390 | 0.479 | 0.974 | 0.0186 | 0.827 |
+| GIN-4 + tuned | train | 0.551 | 0.658 | 0.473 | 0.536 | 0.990 | 0.0138 | 0.912 |
+| GIN-4 + tuned | val | 0.594 | 0.824 | 0.464 | 0.529 | 0.979 | 0.0179 | 0.838 |
+| GIN-4 + tuned | test | 0.494 | 0.738 | 0.372 | 0.454 | 0.971 | 0.0183 | 0.811 |
+
+**GATv2: V0 vs tuned, all metrics, all splits**
+
+| Run | Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|---|
+| GAT-5 | train | 0.475 | 0.679 | 0.365 | 0.424 | 0.985 | 0.0132 | 0.878 |
+| GAT-5 | val | 0.550 | 0.814 | 0.416 | 0.498 | 0.982 | 0.0185 | 0.866 |
+| GAT-5 | test | 0.500 | 0.720 | 0.383 | 0.451 | 0.980 | 0.0192 | 0.851 |
+| GAT-5 + tuned | train | 0.457 | 0.506 | 0.418 | 0.439 | 0.986 | 0.0134 | 0.887 |
+| GAT-5 + tuned | val | 0.592 | 0.805 | 0.469 | 0.535 | 0.985 | 0.0189 | 0.885 |
+| GAT-5 + tuned | test | 0.516 | 0.675 | 0.418 | 0.475 | 0.981 | 0.0194 | 0.863 |
+| GAT-4 | train | 0.507 | 0.597 | 0.441 | 0.477 | 0.988 | 0.0137 | 0.906 |
+| GAT-4 | val | 0.570 | 0.765 | 0.454 | 0.512 | 0.981 | 0.0182 | 0.856 |
+| GAT-4 | test | 0.488 | 0.611 | 0.406 | 0.458 | 0.978 | 0.0189 | 0.841 |
+| GAT-4 + tuned | train | 0.496 | 0.588 | 0.429 | 0.460 | 0.987 | 0.0135 | 0.893 |
+| GAT-4 + tuned | val | 0.587 | 0.828 | 0.455 | 0.530 | 0.984 | 0.0188 | 0.882 |
+| GAT-4 + tuned | test | 0.522 | 0.729 | 0.407 | 0.477 | 0.980 | 0.0191 | 0.847 |
+
+**PNA: V0 vs tuned, all metrics, all splits**
+
+| Run | Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|---|
+| PNA-5 | train | 0.587 | 0.819 | 0.458 | 0.560 | 0.991 | 0.0140 | 0.927 |
+| PNA-5 | val | 0.648 | 0.872 | 0.516 | 0.610 | 0.986 | 0.0188 | 0.883 |
+| PNA-5 | test | 0.611 | 0.800 | 0.494 | 0.574 | 0.986 | 0.0201 | 0.892 |
+| PNA-5 + tuned | train | 0.564 | 0.706 | 0.470 | 0.545 | 0.990 | 0.0139 | 0.920 |
+| PNA-5 + tuned | val | 0.653 | 0.818 | 0.543 | 0.605 | 0.985 | 0.0186 | 0.872 |
+| PNA-5 + tuned | test | 0.613 | 0.775 | 0.507 | 0.565 | 0.985 | 0.0201 | 0.892 |
+| PNA-4 | train | 0.598 | 0.839 | 0.464 | 0.585 | 0.993 | 0.0144 | 0.956 |
+| PNA-4 | val | 0.648 | 0.894 | 0.508 | 0.606 | 0.985 | 0.0185 | 0.870 |
+| PNA-4 | test | 0.617 | 0.856 | 0.482 | 0.575 | 0.984 | 0.0200 | 0.888 |
+| PNA-4 + tuned | train | 0.564 | 0.730 | 0.459 | 0.534 | 0.989 | 0.0137 | 0.907 |
+| PNA-4 + tuned | val | 0.646 | 0.853 | 0.519 | 0.593 | 0.986 | 0.0188 | 0.880 |
+| PNA-4 + tuned | test | 0.600 | 0.844 | 0.465 | 0.561 | 0.985 | 0.0201 | 0.892 |
+
+**Graph Transformer: V0 vs tuned, all metrics, all splits**
+
+| Run | Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|---|
+| TR-5 | train | 0.569 | 0.813 | 0.438 | 0.538 | 0.990 | 0.0139 | 0.923 |
+| TR-5 | val | 0.629 | 0.893 | 0.485 | 0.577 | 0.984 | 0.0185 | 0.867 |
+| TR-5 | test | 0.598 | 0.832 | 0.466 | 0.553 | 0.983 | 0.0196 | 0.871 |
+| TR-5 + tuned | train | 0.577 | 0.776 | 0.460 | 0.554 | 0.990 | 0.0138 | 0.918 |
+| TR-5 + tuned | val | 0.639 | 0.854 | 0.510 | 0.592 | 0.985 | 0.0187 | 0.876 |
+| TR-5 + tuned | test | 0.607 | 0.799 | 0.490 | 0.574 | 0.986 | 0.0200 | 0.886 |
+| TR-4 | train | 0.597 | 0.814 | 0.471 | 0.587 | 0.993 | 0.0144 | 0.955 |
+| TR-4 | val | 0.644 | 0.879 | 0.508 | 0.588 | 0.981 | 0.0182 | 0.854 |
+| TR-4 | test | 0.602 | 0.788 | 0.487 | 0.574 | 0.983 | 0.0198 | 0.881 |
+| TR-4 + tuned | train | 0.579 | 0.754 | 0.470 | 0.556 | 0.991 | 0.0139 | 0.923 |
+| TR-4 + tuned | val | 0.642 | 0.862 | 0.512 | 0.591 | 0.983 | 0.0185 | 0.866 |
+| TR-4 + tuned | test | 0.604 | 0.796 | 0.487 | 0.564 | 0.982 | 0.0195 | 0.865 |
+
+- **Rule outcome:** seven of the eight runs are ties (validation gaps of 0.018 or less); GAT-5 + tuned is +0.042, the only run above the 0.02 line. The tuned sheet does not win on most configurations, so by the rule fixed in advance **V0 stays the default GFP sheet** for every other experiment; the GATv2 result is a separate finding, not a change of default.
+- **Reading:** the tuned sheet never hurts (validation gaps from −0.004 to +0.042) and moves only GATv2, where both runs go up on validation F1 and PR-AUC and on test (+0.016 and +0.034). GIN, PNA and the Transformer are unchanged: the longer windows, 12-hop cycles and finer bins add nothing those operators did not already get from V0 plus message passing. GATv2 is the operator that profits least from edge features on its own (§7.2), and it is the only one that reacts to extra pre-computed structure — the same pattern as RWPE (§7.5), where GAT-5 was again the only run above the tie band. Whether this is a property of GATv2 or of the weak GAT-5 V0 run (best epoch 20, still improving) needs the seed cross-check.
+- **Thresholds move, F1 does not:** the tuned sheet changes the validation-chosen threshold in every run (PNA-5 0.71 → 0.56, GIN-5 0.50 → 0.72), which trades precision against recall on test without changing F1 beyond noise. Operating points (section 4 of `EXPERIMENTS.md`) are the place to compare the two sheets at a fixed alert budget.
+- **Overfitting is unchanged by the sheet:** config 4 overfits for GIN, mildly for PNA and the Transformer, with either sheet (the checkpoints move earlier for PNA and the Transformer, to epoch 10); config 5 does not, and GATv2 never does. The one exception is GIN-5 + tuned, which shows a mild drift GIN-5 lacked — the same exception as GIN-5 + RWPE.
+- **Caveat:** single seed: the GATv2 gaps (+0.042 and +0.018 on validation, +0.016 and +0.034 on test) count only if they survive the seed cross-check. The 120 h sheet of §3 is worth computing only if the GATv2 gain survives the seed cross-check.
+- **Runtime (from the history logs):** 23–80 min per run, 6.2 h for the batch; PNA-4 + tuned slowest at 241 s per epoch, GIN-5 + tuned fastest at 70 s.
 
 ## 8 · Repository map
 
@@ -1170,10 +1392,13 @@ Validation F1 decides (gap < 0.02 = tie); test shown for completeness.
 | `PNA_fixed_architecture.ipynb` / `TRANSFORMER_fixed_architecture.ipynb` | the same notebook for PNA and for the graph transformer (only the config cell differs); results in §7.3 and §7.4 |
 | `RWPE_encoding.ipynb` / `rwpe_compute.py` | RWPE node encoding per snapshot (toy sanity test against PyG `AddRandomWalkPE`, edge-list check against the graph files, self-loop tables, per-step time / RAM / fill-in log, checks, diagnostics, value scale); the script does the exact scipy computation, CPU only, locally or on Kaggle → `Data/rwpe/rwpe_k{8,16}_{train,val,test}.pt` |
 | `RWPE_fixed_architecture.ipynb` | the same Kaggle notebook for the node-encoding runs of §7.5: config entries carry `operator` and `node_enc` (all eight runs in one session), RWPE files from the Kaggle dataset `hi-small-rwpe`; summary `batch_summary_rwpe.csv` per family |
+| `GFP_fixed_architecture.ipynb` | the same Kaggle notebook for the data-tuned GFP runs of §7.6: config entries carry `operator` and `gfp_variant` (all eight runs in one session), the tuned sheet from the Kaggle dataset `hi-small-gfp-tuned` swapped into the GFP block at load time; summary `batch_summary_gfp_tuned.csv` per family |
 | `run_gfp_wsl.py` | causal batched GFP bridge (Windows snapml lacks GFP → runs in WSL) |
 | `Progress_Report.md` / `EXPERIMENTS.md` | markdown mirrors of this page (with the reference list) and of the experiments page — Notion is the main copy |
 | `Outputs/<FAMILY>/<run>/` (GIN, GAT, PNA, TRANSFORMER) | results.json (all splits, all metrics), history.csv, curves.png, best.pt, predictions.csv (the last two not versioned) • batch_summary.csv per batch |
 | `Outputs/RWPE/<FAMILY>/<run>/` | the same files for the node-encoding runs (§7.5) • batch_summary_rwpe.csv per family |
+| `Outputs/GFP_TUNED/<FAMILY>/<run>/` | the same files for the data-tuned GFP runs (§7.6) • batch_summary_gfp_tuned.csv per family |
+| `Data/gfp_variants/` (not versioned) | `tuned.npy` (float32 [5,077,237, 64]) + `tuned_cols.json`, rows aligned with `edge_features.csv`; uploaded to Kaggle as the dataset `hi-small-gfp-tuned` |
 | `Data/rwpe/` (not versioned) | `rwpe_k{8,16}_{train,val,test}.pt` (float32 [515,070, k]) + per-step logs; uploaded to Kaggle as the dataset `hi-small-rwpe` |
 
 ---
