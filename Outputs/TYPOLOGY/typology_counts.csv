@@ -1,0 +1,11 @@
+typology,train_edges,train_attempts,val_edges,val_attempts,test_edges,test_attempts,attempts_in_window,attempts_crossing_split,too_few_test
+CYCLE,113,33,65,24,65,25,54,25,False
+FAN-IN,117,21,64,19,71,19,40,17,False
+FAN-OUT,137,25,65,21,74,20,48,17,False
+GATHER-SCATTER,215,29,100,26,147,39,51,27,False
+SCATTER-GATHER,227,24,147,23,123,23,44,23,False
+STACK,169,21,157,28,107,23,40,25,False
+BIPARTITE,139,26,50,10,52,17,45,8,False
+RANDOM,60,20,45,17,45,17,41,11,False
+UNANNOTATED,1120,0,389,0,459,0,0,0,False
+ALL LAUNDERING,2297,199,1082,168,1143,183,363,153,False
