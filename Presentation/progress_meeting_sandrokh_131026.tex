@@ -50,7 +50,7 @@
   \begin{tabular}{@{}>{#1}l@{}}}{\end{tabular}\end{beamercolorbox}}
 
 \renewcommand{\cite}[1]{\textcolor{inkgrey}{(#1)}}   % plain (Author et al., year) citations
-\usepackage{colortbl}                              % whole-cell shading (slide 15)
+\usepackage{colortbl}                              % whole-cell shading (slide 16)
 \definecolor{greenhi}{HTML}{00441B}   % Greens colormap: highest of the three
 \definecolor{greenmid}{HTML}{3A8448}
 \definecolor{greenlo}{HTML}{74C476}   % lowest
@@ -378,6 +378,51 @@
         winners is planned.}
 \end{frame}
 
+\begin{frame}{How our runs compare with the dataset paper (HI-Small)}
+  \vspace{-0.4em}
+  \begin{table}
+    \small
+    \setlength{\tabcolsep}{5pt}
+    \renewcommand{\arraystretch}{1.05}
+    \begin{tabular}{@{}lcccc@{}}
+      \toprule
+      & \multicolumn{2}{c}{Edge features} & This work & Altman et al. 2023$^{*}$ \\
+      \cmidrule(lr){2-3}
+      Model & MP & Readout & \textit{F1 (\%), one seed} & \textit{F1 (\%), 4 seeds} \\
+      \midrule
+      GIN & base & base+GFP & \cellcolor[HTML]{246C37}\textcolor{white}{52.5} & \cellcolor[HTML]{74C476}\textcolor{white}{28.7 $\pm$ 1.1} \\
+      GATv2 & base & base+GFP & \cellcolor[HTML]{2C753E}\textcolor{white}{50.0} & NA \\
+      PNA & base & base & \cellcolor[HTML]{064B20}\textcolor{white}{61.4} & \cellcolor[HTML]{165C2C}\textcolor{white}{56.8 $\pm$ 2.4} \\
+      Transformer & base+GFP & base+GFP & \cellcolor[HTML]{0A4F23}\textcolor{white}{60.2} & NA \\
+      GFP + LightGBM & -- & base+GFP & NA & \cellcolor[HTML]{01451C}\textcolor{white}{62.9 $\pm$ 0.3} \\
+      GFP + XGBoost & -- & base+GFP & NA & \cellcolor[HTML]{00441B}\textcolor{white}{63.2 $\pm$ 0.2} \\
+      \bottomrule
+    \end{tabular}
+  \end{table}
+  \vspace{-0.6em}
+  {\scriptsize\color{inkgrey}$^{*}$ The paper's GNNs use 4 base edge features (timestamp, amount received,
+   received currency, payment format) in both MP and readout, and a constant node feature of 1s.\par}
+  \vspace{0.2em}
+  \begin{keybox}
+    \item We beat the paper's GIN and PNA, but not its tree models
+  \end{keybox}
+  \note{Test-set minority-class F1. Paper values from Table 2 of Altman et al. (2023), same 60/20/20
+        temporal split and 100/100 neighbour sampling as ours; the paper has no GATv2 or Transformer
+        run and we have no tree run yet (planned cross-check). MP and Readout describe our runs
+        (GIN config 5, GATv2 config 5, PNA config 2, Transformer config 4); the paper's GNNs are
+        base / base, with base = the 4 features in the footnote, projected once and reused at the
+        readout. Green shade is the slide-9 scale applied to the value: lightest = 28.7, darkest =
+        63.2, linear in between. The paper also reports GIN with edge updates at 47.7 $\pm$ 7.9, a
+        step we do not use; our GIN config 2 (base / base) scores 45.6, so the GIN claim holds on
+        like-for-like inputs too.
+        Caveats: the paper uses the full HI-Small, we removed the laundering-only tail days after
+        10 Sep 2022, so our test window is stricter. The paper tuned depth, width (hidden 64),
+        learning rate and dropout per model and averages four seeds; we fixed one architecture
+        (hidden 128) and ran one seed. Our threshold is chosen on validation; the paper's GNNs use
+        the default decision rule (argmax, i.e. 0.5). The paper's GFP counts simple cycles up to
+        length 10; our V0 sheet follows its Appendix D except the cycle cap.}
+\end{frame}
+
 % ===================================================================== ONGOING
 \section{Extensions: RWPE and GFP V1}
 
@@ -633,18 +678,20 @@
 \begin{frame}{References}
   \scriptsize
   \begin{itemize}
-    \item E. Altman, J. Blanuša, L. von Niederhäusern, B. Egressy, A. Anghel, K. Atasu.
+    \item E. Altman, J. Blanu\v{s}a, L. von Niederhäusern, B. Egressy, A. Anghel, K. Atasu.
           \emph{Realistic Synthetic Financial Transactions for Anti-Money Laundering Models.}
           NeurIPS 2023 Datasets and Benchmarks.
     \item K. Xu, W. Hu, J. Leskovec, S. Jegelka. \emph{How Powerful are Graph Neural Networks?} ICLR 2019 (GIN).
     \item W. Hu et al. \emph{Strategies for Pre-training Graph Neural Networks.} ICLR 2020 (GINE edge term).
     \item S. Brody, U. Alon, E. Yahav. \emph{How Attentive are Graph Attention Networks?} ICLR 2022 (GATv2).
-    \item G. Corso, L. Cavalleri, D. Beaini, P. Liò, P. Veličković.
+    \item G. Corso, L. Cavalleri, D. Beaini, P. Liò, P. Veli\v{c}kovi\'c.
           \emph{Principal Neighbourhood Aggregation for Graph Nets.} NeurIPS 2020 (PNA).
     \item Y. Shi, Z. Huang, S. Feng, H. Zhong, W. Wang, Y. Sun. \emph{Masked Label Prediction: Unified
           Message Passing Model for Semi-Supervised Classification.} IJCAI 2021 (TransformerConv).
     \item V. P. Dwivedi, A. T. Luu, T. Laurent, Y. Bengio, X. Bresson. \emph{Graph Neural Networks with
           Learnable Structural and Positional Representations.} ICLR 2022 (RWPE).
+    \item IBM Multi-GNN, reference implementation of the GNN baselines of Altman et al. (2023).
+          \texttt{github.com/IBM/Multi-GNN}
     \item IBM Snap ML, \emph{Graph Feature Preprocessor} documentation.
           \texttt{snapml.readthedocs.io/en/latest/graph\_preprocessor.html}
     \item E. Altman. \emph{IBM Transactions for Anti-Money Laundering (AML).} Kaggle dataset and
