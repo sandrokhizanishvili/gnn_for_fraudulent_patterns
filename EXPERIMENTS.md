@@ -31,6 +31,14 @@ Mirrored on the Notion experiments page (kept in sync).
 - [x] GFP `tuned` batch (8 runs, `GFP_VARIANT = tuned`) trained on Kaggle, 5–6 Oct; results in
       `Progress_Report.md` §7.6 (ties for GIN, PNA, the Transformer and GAT-4; GAT-5 + tuned the
       only run above the tie band; V0 stays the default sheet, section 3 "GFP tuned runs")
+- [ ] GBT cross-check — LightGBM on the same 93 inputs, no message passing: one successive-halving
+      search (x0 = 100) on the train rows, then 4 seeds; runs locally on CPU
+      (`GBT_fixed_features.ipynb`, section 3 "GBT cross-check runs"); results → `Progress_Report.md` §7.7
+- [ ] **GIN recipe tuning** (decided 17 Oct, after the 13 Oct meeting) — the training recipe is tuned once
+      per operator on config 2 and then frozen; GIN first, PNA / GATv2 / Transformer later with the same code
+      and notebook template. Rules and stage tracker in section 2b; `GIN_tuning.ipynb` (Kaggle, 3–5 sessions)
+      → `Outputs/TUNING/GIN/recipe.json`; then `GIN_tuning_final.ipynb` retrains on train + val with 4 seeds
+      (section 3b); results → `Progress_Report.md` §7.8–7.9
 
 ---
 
@@ -68,13 +76,16 @@ laundering). Each transaction is an edge, each account a node.
 ## 2 · Message passing — how the model processes it
 
 All operators share one code file (`gnn_core.py`) and one fixed template — 2 layers, width 128,
-dropout 0.3, identical training recipe — so only the aggregation rule differs.
+dropout 0.3, identical training recipe — so only the aggregation rule differs. This is the **v1 recipe**
+(fixed a priori, 20 epochs, seed 42); section 2b tunes it once per operator, GIN first.
 
 - [x] **GIN / GINE** — sums neighbour messages · `GIN_fixed_architecture.ipynb` · 7 runs
 - [x] **PNA** — several aggregators at once (mean, max, min, std) · `PNA_fixed_architecture.ipynb` · 7 runs
 - [x] **GATv2** — attention decides which neighbours matter · `GAT_fixed_architecture.ipynb` · 7 runs
 - [x] **Graph Transformer** — attention with edge features over the sampled neighbourhood ·
       `TRANSFORMER_fixed_architecture.ipynb` · 7 runs
+- [ ] **No message passing — LightGBM** on the same features (hand-crafted graph features vs
+      message passing) · `GBT_fixed_features.ipynb` · 1 search + 4 seeds (section 3, "GBT cross-check runs")
 
 **Two extra questions about message passing itself (optional)**
 
@@ -85,7 +96,60 @@ dropout 0.3, identical training recipe — so only the aggregation rule differs.
 
 ---
 
-## 3 · Runs — Data × Message passing
+## 2b · Recipe tuning — one pass per operator, then frozen (GIN first)
+
+Hyperparameters were tuned sequentially, one at a time, in a pre-registered order, selected on validation
+only; Luo et al. (2024) and GNN+ (2025) also used non-exhaustive searches. The recipe is tuned on
+**config 2 (mp base / readout base)** and never per feature config: every feature config of an operator
+reuses its frozen recipe unchanged, so the feature comparison stays a fixed-architecture comparison.
+Hyperparameter rows are called **trials**; **config** keeps meaning the feature configurations 1–7.
+Why: in the v1 runs the best epoch sits at 17–20 of 20 in 16 of 44 runs, train F1 is below validation F1
+in every run, and one seed cannot separate gains inside the 0.02 tie band.
+Why this order (architecture first, then optimizer, regularisation last): dropout depends on the final
+capacity (depth, FFN), and the best learning rate depends on the normalisation, the depth and the loss
+scale (pos_weight), so the architecture is fixed first and the regularisation last. The starting
+incumbent is the v1 recipe (dropout 0.3, no norm, 2 layers, no FFN, pos_weight 8, LR 1e-3).
+
+**Rules, fixed before the first run** (`GIN_tuning.ipynb`; the code is generic, `gnn_core.py`):
+
+| Item | Rule |
+|---|---|
+| Config / seeds | config 2; tuning seeds 42, 43; final retrain seeds 42, 43, 44, 45 |
+| Stages, in order | 1 normalisation after each MP layer {none, BatchNorm, LayerNorm} · 2 layers {2, 4, 6} · 3 FFN after each MP layer {off, on} · 4 pos_weight {8, 16} · 5 learning rate {5e-4, 1e-3, 3e-3} · 6 dropout {0.2, 0.3, 0.4}. If a deeper model wins stage 2, stages 3–6 run at that depth |
+| Edge rule | a numeric winner at the edge of its grid gets one extra trial one step beyond (dropout 0.1 / 0.5; layers 3 / 8; pos_weight 4 / 32; LR 1e-4 / 1e-2) before the next stage |
+| Fixed, not tuned | hidden 128, batch 8,192 seed edges, weight decay 1e-5, residuals on. Optimiser and scheduler: Adam + CosineAnnealingLR(T_max = 100), no warm-up, identical for every trial and for the final retrain; only the starting LR varies (stage 5). The final retrain uses the identical scheduler and stops at the frozen best epoch |
+| Dropout scope | one value for the MP layers, the readout MLP and the FFN; no separate readout dropout |
+| Layer | `h ← h + Dropout(ReLU(Norm(conv(h))))`; Norm is the identity for `none`; GIN's inner-MLP BatchNorm stays (it is the operator) |
+| FFN (stage 3) | `h ← Norm(h + Linear(2h→h)(Dropout(ReLU(Linear(h→2h)(h)))))`, Norm = the stage-1 choice (LayerNorm if stage 1 kept `none`); expansion ×2 and the inner dropout are assumptions (GNN+ does not fix them) |
+| Neighbours per hop | hops 1–2 always [100, 100]; 4 layers [100, 100, 50, 50]; 6 layers [100, 100, 50, 50, 25, 25]; edge depths 3 = [100, 100, 50], 8 = [100, 100, 50, 50, 25, 25, 25, 25]. Fallback 1 (far hops only): 4 → [100, 100, 25, 25], 6 → [100, 100, 25, 25, 10, 10]; if that fails too, the depth is dropped and documented |
+| Probe (first session) | per depth 2 / 4 / 6 at the heaviest setting (BatchNorm + FFN): 2–3 warm-up batches, ~20 timed training batches with peak GPU memory, plus one full prediction pass over the val graph (train + val context) with its peak memory and time. Pass = both fit and the epoch estimate is ≤ ~3× the 2-layer one; the budget is recomputed from these numbers → `probe.json` |
+| Epochs | cosine T_max = 100, at most 100 epochs; early stop when the 3-epoch moving average of validation F1 has not improved for 10 epochs, never before epoch 20; a run that reaches 100 is flagged |
+| Best epoch of a trial | argmax of the 3-epoch smoothed **seed-mean** validation F1 curve over the epochs both seeds reached; per-seed threshold = that seed's validation threshold at that epoch |
+| Winner of a stage | a trial replaces the incumbent only if its seed-mean validation F1 is higher by more than max(0.01, the larger of the two seed stds); otherwise the incumbent stays; ties go to the simpler option (fewer layers, no norm, no FFN) |
+| Train vs validation at the best epoch | each (trial, seed) keeps a temporary checkpoint per epoch; both seeds run back to back; after the second seed the checkpoints at the seed-mean best epoch are scored on train and validation (that seed's threshold) → `trial.json`, then the checkpoints are deleted. A trial counts as done only once this is written; a session that stops between the two seeds re-runs the first |
+| Train metrics during training | train split scored every 5th epoch and at the last one; validation every epoch |
+| Summary tables | `stage_summary.csv` / `trials_summary.csv`: one row per trial with every hyperparameter, best epoch, stopped epoch per seed, train and validation F1 / PR-AUC (mean ± std), the train − validation gap, winner flag. Caveat next to the gap: validation has 0.107 % laundering vs 0.075 % on train, so part of the gap is prevalence, not underfitting |
+| Freeze | `Outputs/TUNING/GIN/recipe.json` — knobs, neighbour lists, T_max, best epoch, thresholds for all four retrain seeds (42 and 43 their own at the best epoch; 44 and 45 the mean of the two), validation F1 mean ± std, source stage. The single source of the frozen numbers; no copy in code |
+| Final retrain | `GIN_tuning_final.ipynb`: train + val graph (built in memory, appendix), T_max = 100 unchanged, stop at the frozen best epoch, frozen per-seed threshold, seeds 42–45, test scored once per seed; reported: test metrics as mean ± std over the four seeds (F1, PR-AUC), threshold sensitivity (frozen −0.10 … +0.10 and 0.5), train / val metrics with val marked as seen in training |
+| Known limitation | the train + val graph has 496 batches per epoch vs 372 in tuning, so stopping at the frozen epoch means ~33 % more update steps with the same per-epoch LR profile; reported, not corrected |
+| Not refit | GFP scalers and the bank target encoding stay fit on the train window (a consistent refit would change the val rows' features between phases) |
+| Afterwards | every GIN feature config reuses the frozen recipe (validation-chosen epoch and threshold per config, 3 seeds); PNA, GATv2 and the Transformer are tuned the same way, each in its own session block |
+
+**GIN stage tracker** (pointer = `Outputs/TUNING/GIN/<stage>/`, no numbers here):
+
+- [ ] Probe — depths 2 / 4 / 6 at BatchNorm + FFN → `Outputs/TUNING/GIN/probe.json`
+- [ ] Stage 1 · norm {none, BatchNorm, LayerNorm} → `Outputs/TUNING/GIN/s1_norm/`
+- [ ] Stage 2 · layers {2, 4, 6} → `Outputs/TUNING/GIN/s2_layers/`
+- [ ] Stage 3 · FFN {off, on} → `Outputs/TUNING/GIN/s3_ffn/`
+- [ ] Stage 4 · pos_weight {8, 16} → `Outputs/TUNING/GIN/s4_pos_weight/`
+- [ ] Stage 5 · LR {5e-4, 1e-3, 3e-3} → `Outputs/TUNING/GIN/s5_lr/`
+- [ ] Stage 6 · dropout {0.2, 0.3, 0.4} → `Outputs/TUNING/GIN/s6_dropout/`
+- [ ] Edge-rule trials (only if triggered; listed here when they run)
+- [ ] Freeze → `Outputs/TUNING/GIN/recipe.json`, `trials_summary.csv`, `tuning_curves.png`
+
+---
+
+## 3 · Runs — Data × Message passing (v1 recipe — fixed a priori, 20 epochs, seed 42)
 
 *Each family runs the same seven feature configurations: which edge features enter message
 passing / which the final classifier sees. "base" = 20 baseline, "base+GFP" = all 81,
@@ -170,12 +234,61 @@ default sheet for every other experiment (RWPE, direction, sampling, seeds) unti
 otherwise. Every result comments on overfitting from the curves, especially config 4 (overfit
 for GIN, mildly for PNA and the Transformer, on V0).
 
+### GBT cross-check runs — hand-crafted graph features vs message passing (`GBT_fixed_features.ipynb`, local CPU)
+
+*LightGBM on the same 93 inputs the GNNs see — the 81 edge features (20 baseline + 61 GFP V0) plus
+the 6 + 6 entity one-hots of the two endpoints — on the same positional 60/20/20 split and the same
+protocol (threshold swept on validation, best-validation-F1 boosting round kept, test scored once,
+every metric on every split). No message passing: the GFP block is the only graph information, so the
+contrast is pre-computed graph features vs learned ones. Hyperparameters are chosen once, by the
+paper's successive halving (Appendix C): x0 = 100 random configs → 100 @ 10 % → 50 @ 20 % → 25 @ 40 %
+→ 12 @ 80 % → 6 @ 100 % of the train rows (the most recent rows), each scored on the full validation
+set; then frozen for the four seeds. Test is never used until the four final models are scored.
+Runs land in `Outputs/GBT/<run>/`, the search log in `Outputs/GBT/search/`, the summaries in
+`Outputs/GBT/batch_summary_gbt.csv` and `seed_summary_gbt.csv`.*
+
+- [ ] **GBT search** · LightGBM, successive halving on the train rows, scored on validation → `Outputs/GBT/search/best_params.json` + `trials.csv`
+- [ ] **GBT-42** · all 93 features · seed 42 → `Outputs/GBT/lightgbm_readout-full_seed-42/` — the run compared with the single-seed GNN runs
+- [ ] **GBT-43** · all 93 features · seed 43 → `Outputs/GBT/lightgbm_readout-full_seed-43/`
+- [ ] **GBT-44** · all 93 features · seed 44 → `Outputs/GBT/lightgbm_readout-full_seed-44/`
+- [ ] **GBT-45** · all 93 features · seed 45 → `Outputs/GBT/lightgbm_readout-full_seed-45/`
+
+**Decision rule, fixed in advance:** the four seeds give mean ± std; the GBT is set against the best
+run of every family and against configs 3 / 7 (GFP at the readout, nothing in message passing). Only
+test F1 is a fair score for the GBT: validation is used three times (hyperparameters, kept round,
+threshold), so its F1 is optimistic; validation is shown for the overfitting check only. A gap inside
+the 4-seed spread is a tie. Bank target encoding is re-verified as train-label-only before the run
+(trees exploit a leaky encoding immediately). The paper's GFP + LightGBM (62.86 ± 0.25) is a reference
+point, not a target: different raw features, simple cycles ≤ 6 vs 10, truncated test window,
+validation-chosen threshold vs 0.5 (F1 at 0.5 is stored alongside), x0 = 100 vs 1000 with a narrower
+search space, LightGBM 4.6 vs 3.1.1.
+
 ### Cross-checks (optional)
 
-- [ ] **Gradient-boosted trees** on the same features, no graph — does message passing add
-      anything beyond engineered features?
+- [x] **Gradient-boosted trees** on the same features, no message passing — does message passing add
+      anything beyond engineered features? → planned as the "GBT cross-check runs" block above
 - [ ] **Seeds** — 3–4 random seeds on the winning runs, mean ± std; differences inside the seed
-      spread count as ties
+      spread count as ties → covered by the tuned-recipe runs of section 3b (3 seeds)
+
+---
+
+## 3b · Runs v2 — tuned recipes (GIN first)
+
+*Runs with a frozen recipe from section 2b. The final retrain uses the train + val graph, the frozen epoch
+and threshold, and scores test once per seed; summaries give mean ± std over the seeds. Run names keep the
+v1 convention; the seed is a sub-folder.*
+
+### GIN final retrain (`GIN_tuning_final.ipynb`, one Kaggle session)
+
+- [ ] **GIN-2 v2 · seed 42** · base / base · frozen recipe → `Outputs/FINAL/GIN/retrain/gin_mp-base_readout-base_dir-in/seed-42/`
+- [ ] **GIN-2 v2 · seed 43** → `Outputs/FINAL/GIN/retrain/gin_mp-base_readout-base_dir-in/seed-43/`
+- [ ] **GIN-2 v2 · seed 44** (threshold = mean of seeds 42 and 43) → `Outputs/FINAL/GIN/retrain/gin_mp-base_readout-base_dir-in/seed-44/`
+- [ ] **GIN-2 v2 · seed 45** (threshold = mean of seeds 42 and 43) → `Outputs/FINAL/GIN/retrain/gin_mp-base_readout-base_dir-in/seed-45/`
+- [ ] Summaries → `Outputs/FINAL/GIN/retrain/batch_summary_retrain.csv`, `seed_summary_retrain.csv` (mean ± std over the four seeds); per-seed `sensitivity.csv`
+
+**Decision rule, fixed in advance:** nothing is chosen here. Test F1 mean ± std and PR-AUC over the four seeds are reported next
+to the v1 GIN-2 run (single seed, 20 epochs) with the protocol difference stated; the sensitivity table shows
+how much the frozen threshold matters. The GIN feature configs under the frozen recipe follow in a later block.
 
 ---
 
@@ -196,6 +309,14 @@ for GIN, mildly for PNA and the Transformer, on V0).
 
 *Newest first. Unticked = in progress · ticked = finished and synced.*
 
+- [ ] **17 Oct** — recipe tuning planned (after the 13 Oct meeting with Aris and Loris): one pass per
+      operator on config 2, GIN first; rules, stages and tracker in section 2b, final-retrain rows in
+      section 3b, train + val graph and `recipe.json` schema in the appendix; `gnn_core.py` changes and
+      `GIN_tuning.ipynb` / `GIN_tuning_final.ipynb` to follow; Notion experiments page synced
+- [ ] **17 Oct** — GBT cross-check planned: `gbt_core.py` + `GBT_fixed_features.ipynb` (LightGBM on
+      the 93-column row, successive halving x0 = 100 on the train rows scored on validation, 4 seeds,
+      thesis protocol, runs locally on CPU); block "GBT cross-check runs" in section 3, decision rule
+      fixed in advance; Notion experiments page synced
 - [x] **5–6 Oct** — GFP tuned batch: all eight runs (configs 5 and 4 × four operators,
       `GFP_VARIANT = tuned`) in one Kaggle session of `GFP_fixed_architecture.ipynb`; results,
       curves and predictions in `Outputs/GFP_TUNED/`, sections and comparison tables in
@@ -288,6 +409,49 @@ sampling; reported as a limitation. RWPE files: `Data/rwpe/rwpe_k{8,16}_{train,v
 float32 [515,070, k], rows in `account_to_idx` order, computed by `rwpe_compute.py` (scipy,
 exact, same maths as PyG `AddRandomWalkPE`: P = D_out⁻¹ A, multi-edges counted, never-senders
 stay 0); on Kaggle they come from the separate dataset `hi-small-rwpe`.
+
+**GBT cross-check** (`gbt_core.py`, `GBT_fixed_features.ipynb`; runs locally in the
+`graph_feature_preprocessor` env on CPU, not on Kaggle): one row per edge = `edge_attr` (81 columns
+exactly as in the graph files: baseline raw, GFP vertex statistics normalised on train) ‖ `x[src]` (6)
+‖ `x[dst]` (6) = 93 columns, built from `test_graph.pt` alone (rows `[:3,046,342]` train,
+`[3,046,342:4,061,789]` val, the rest test; the counts and the 2,297 / 1,082 / 1,143 laundering rows
+are asserted). Search space — practical LightGBM ranges, not the paper's Table 10 (which goes to
+16,384 leaves): `num_round` 100–1000 · `num_leaves` 15–255 · `learning_rate` 0.01–0.1 (log-uniform) ·
+`min_data_in_leaf` 20–500 · `feature_fraction` 0.5–1 · `bagging_fraction` 0.5–1 (`bagging_freq` 1) ·
+`lambda_l1`, `lambda_l2` 0.01–10 (log-uniform) · `scale_pos_weight` 1–10 (the paper's range);
+`objective = binary`, library defaults otherwise. Halving: each (trial, round) is appended to
+`Outputs/GBT/search/trials.csv`, so a stopped search resumes; the best config of the last round (full
+train) goes to `best_params.json`. Final fits: train and validation scored every 25 boosting rounds and
+at the last round (`history.csv`, `epoch` = round), the round with the best validation F1 is kept
+(`best_epoch`), its threshold saved, test scored once at that round. Row columns as in every
+`batch_summary.csv`: `operator = lightgbm`, `mp = none`, `readout = full`, `mp_direction = none`,
+`node_enc = none`, `gfp_variant = v0`, `seed`, `params` = trees kept, `invariant_params = 0` (no
+architecture-invariant block). Run name `lightgbm_readout-full_seed-<seed>`; `results.json` also holds
+`hyperparams` and `paper_comparison` (F1 at threshold 0.5 on val / test, the paper's decision rule).
+`best.txt` (the booster) and `predictions.csv` stay out of git.
+
+**Recipe tuning** (section 2b; `gnn_core.py`, `GIN_tuning.ipynb`, `GIN_tuning_final.ipynb`):
+- *Recipe dict.* `DEFAULT_RECIPE` = the v1 constants (hidden 128, 2 layers, dropout 0.3, norm none, FFN off,
+  neighbours [100, 100], batch 8,192, epochs 20 = cosine T_max, LR 1e-3, weight decay 1e-5, pos_weight 8);
+  `recipe=None` anywhere reproduces v1 exactly (identity norm registers no parameters, the FFN is not
+  registered, so old `best.pt` files load unchanged). `epochs` is the schedule length; how many epochs run is
+  a separate stop argument.
+- *Trial folders.* `Outputs/TUNING/GIN/s<k>_<knob>/<trial>/` with `trial.json` and `seed-<s>/history.csv`,
+  `curves.png`; trial tag = the knob value (`d0.2`, `bn`, `ln`, `l4`, `pw16`, `lr3e-3`, `ffn`). Tuning runs
+  build no test loader and write no `predictions.csv`; per-epoch checkpoints are deleted after the post-trial
+  scoring.
+- *Train + val graph* (final retrain only, built in memory, no new file): the val snapshot's edges, features
+  and times; labels = the train snapshot's labels on the first 3,046,342 rows and the val labels after;
+  `eval_mask` all true. Asserted: the first 3,046,342 edges of the val snapshot equal the train snapshot,
+  3,379 laundering edges, 4,061,789 seeds (496 batches per epoch). RWPE, when used, comes from the val
+  snapshot file. The PNA degree histogram would come from this graph (the graph trained on).
+- *`recipe.json`.* `operator`, `cfg`, `recipe` (all knobs incl. `num_neighbors`, `epochs` = T_max),
+  `best_epoch`, `thresholds` {42, 43: own; 44, 45: mean of the two}, `threshold_source`, `val_f1_mean`,
+  `val_f1_std`, `stopped_epochs`, `source_stage`. Loaded and re-validated by the final notebook, which stops
+  with a clear message if the file is missing.
+- *Final-retrain outputs.* `Outputs/FINAL/GIN/retrain/<run>/seed-<s>/`: `results.json` (plus `phase`,
+  `stop_epoch`, `frozen_threshold`, `val_seen`, the recipe block), `history.csv` (train-mode mini-batch loss
+  per epoch), `curves.png`, `sensitivity.csv`, `predictions.csv` (not versioned).
 
 **Protocol, architecture, artifacts and standing rules:** see `CLAUDE.md` §3–§6. Nothing is
 "done" until results are pushed and this file, `Progress_Report.md` and both Notion pages agree.

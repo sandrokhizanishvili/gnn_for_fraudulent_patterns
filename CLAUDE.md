@@ -54,6 +54,15 @@ they are available). Never leave a number in one place that contradicts another.
 
 ## 3. The fixed architecture — never change it
 
+**Status (17 Oct 2026):** the table below is the **v1 recipe**, fixed a priori for every finished run.
+After the 13 Oct meeting the recipe is tuned **once per operator** on config 2 (base / base) and then
+frozen; it is never tuned per feature config. GIN goes first (`EXPERIMENTS.md` §2b holds the
+pre-registered rules and the stage tracker; `GIN_tuning.ipynb` → `Outputs/TUNING/GIN/recipe.json` →
+`GIN_tuning_final.ipynb`). Until that file exists every GIN run uses v1; PNA, GATv2 and the Transformer
+keep v1 until they are tuned. In `gnn_core.py`, `recipe=None` reproduces v1 exactly; a tuned run passes
+a recipe dict loaded from `recipe.json` (the only copy of the frozen numbers). This section is rewritten
+per operator when its recipe is frozen.
+
 Fixed **a priori for ALL runs** (chosen so the 81-dim feature set is never compressed):
 
 | Fixed | Value |
@@ -148,6 +157,16 @@ them here. Rules that apply when implementing:
   run on validation F1 (gap < 0.02 = tie; test never used to choose). A win stays a separate
   finding; V0 remains the default sheet for every other experiment until I decide otherwise.
   Always comment on overfitting from the curves, especially config 4.
+- **GBT cross-check (decided 17 Oct):** LightGBM on the same 93 inputs (81 `edge_attr` columns +
+  the 6 + 6 entity one-hots of both endpoints), no message passing — hand-crafted graph features vs
+  learned ones. Hyperparameters are chosen **once** by successive halving (x0 = 100, η = 2,
+  r0 = 0.1; train rows only, scored on validation) and then frozen for the 4 seeds (42–45); nothing is
+  tuned per seed. Code in `gbt_core.py` (imports the metric / threshold / plot helpers from
+  `gnn_core.py`, never copies them); notebook `GBT_fixed_features.ipynb` runs **locally on CPU**
+  (`graph_feature_preprocessor` env + lightgbm), the one exception to the Kaggle loop of §7. The
+  search space and row conventions are in the `EXPERIMENTS.md` appendix. Only test F1 is a fair
+  score for these runs (validation picks hyperparameters, kept round and threshold); say so wherever
+  the GBT is compared.
 
 ## 4. Evaluation protocol — never deviate
 
@@ -231,6 +250,28 @@ checkpoint; one row per evaluated edge of every split, sorted by `edge_id`):
 It is written by `gnn_core.save_predictions()`; operator notebooks never re-implement it.
 Run name: `<model>_mp-<mp>_readout-<ro>_dir-<dir>[_enc-<enc>][_gfp-<variant>][_temporal]`
 (optional parts only when the knob is not at its default).
+GBT cross-check runs: `Outputs/GBT/lightgbm_readout-full_seed-<seed>/` with the same files, except
+`best.txt` (the LightGBM booster, gitignored) instead of `best.pt`; `history.csv` has one row per
+scored boosting round (`epoch` = round); the result row keeps every `batch_summary.csv` column with
+`operator = lightgbm`, `mp = none`, `mp_direction = none`, `params` = trees kept,
+`invariant_params = 0`; `results.json` adds `hyperparams` and `paper_comparison` (F1 at 0.5).
+Search log: `Outputs/GBT/search/`; summaries `Outputs/GBT/batch_summary_gbt.csv` and
+`seed_summary_gbt.csv`.
+Recipe-tuning runs (`EXPERIMENTS.md` §2b): `Outputs/TUNING/<FAMILY>/s<k>_<knob>/<trial>/` holds `trial.json`
+(the trial's scoring: knobs, seed-mean best epoch, per-seed thresholds, train / val metrics mean ± std, the
+gap) and `seed-<s>/history.csv`, `curves.png`; per stage `stage_summary.csv`; per family
+`trials_summary.csv`, `tuning_curves.png`, `probe.json` and **`recipe.json`** (the frozen recipe — the only
+copy of its numbers, loaded by the final notebook; never a dict in code). Tuning runs build no test loader
+and write no `predictions.csv`; per-epoch checkpoints are deleted after the post-trial scoring; `best.pt`
+stays on Kaggle. Trial tag = the knobs that differ from the v1 recipe + T_max (`d0.2`, `bn`, `ln`, `l4`,
+`pw16`, `lr0.003`, `ffn`, joined by `_`; `base` = none). Hyperparameter rows are **trials**; **config** keeps
+meaning the feature configurations 1–7.
+Final retrain (train + val graph, frozen epoch and threshold): `Outputs/FINAL/<FAMILY>/retrain/<run>/seed-<s>/`
+with `results.json` (plus `phase`, `stop_epoch`, `frozen_threshold`, `val_seen`, the recipe block),
+`history.csv` (train-mode mini-batch loss and LR per epoch), `curves.png`, `sensitivity.csv` (test F1 /
+precision / recall at the frozen threshold ± 0.05 / ± 0.10 and at 0.5), `predictions.csv` and `final.pt`
+(the last two not versioned); summaries `batch_summary_retrain.csv`, `seed_summary_retrain.csv`. Run names
+keep the convention above; the seed is the sub-folder.
 `results/` holds only the archived hidden-64 reference of Run 1 (superseded; keep it).
 
 After a run finishes: mark its row ✅ in `EXPERIMENTS.md` with the `Outputs/` pointer (no
@@ -264,6 +305,25 @@ mirror both to their Notion pages. Mark superseded rows `SUPERSEDED`, never dele
   entries carry `operator` and `gfp_variant`, the graphs are loaded once with
   `GFP_VARIANT = tuned` (one sheet per batch), runs land in `Outputs/GFP_TUNED/<FAMILY>/<run>/`
   with `batch_summary_gfp_tuned.csv` per family.
+  Fourth exception: `GBT_fixed_features.ipynb` is not an operator notebook — LightGBM, no message
+  passing (§3b). It keeps the section skeleton (environment, configuration, load, search, runs,
+  comparison) but imports `gbt_core.py`, has no Kaggle cells and runs locally on CPU in the
+  `graph_feature_preprocessor` env (Claude Code may run it in the background via nbconvert; it is
+  resumable: logged search trials and finished runs are skipped on rerun).
+  Fifth exception: the recipe-tuning pair `<OP>_tuning.ipynb` / `<OP>_tuning_final.ipynb` (GIN first;
+  one pair per operator as it is tuned, same cells, only the knobs cell differs). The tuning notebook
+  sets `OPERATOR`, `CFG` (config 2), `STAGES`, `SEEDS`, `TUNE` and runs the pre-registered stages through
+  `gnn_core.run_tuning_trial` / `choose_winner` / `probe_depths` / `save_recipe`; it never builds a test
+  loader, scores the train split every 5th epoch (`eval_train_every = 5`), and its `OUT_ROOT` sits inside
+  the Kaggle repo clone so committed trials are skipped on the next session. The final notebook loads
+  `recipe.json` (and stops with a clear message if it is missing), builds the train + val graph in
+  memory and runs `run_final` for seeds 42–45 (42 / 43 keep their tuning threshold, 44 / 45 the mean of the
+  two; test metrics reported as mean ± std over the four).
+- **`recipe=None` reproduces v1.** Every `gnn_core.py` entry point takes an optional recipe dict
+  (`full_recipe`, `DEFAULT = the module constants`). After any change to `gnn_core.py`, the regression
+  check is part of the local verification: `run_experiment(recipe=None)` on the smoke slice with the
+  previous file and the new one in the same process must give the same `history.csv` values and
+  `best.pt` tensors, and a v1 `best.pt` must still load with `strict=True`.
 - **Kaggle environment cell — keep verbatim in every operator notebook.** The pinned
   PyTorch / PyG stack below is known to work on Kaggle GPU; do not "simplify", reorder, or
   change versions without my OK (a mismatched torch / torch-scatter build is the usual cause of

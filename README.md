@@ -21,6 +21,9 @@ Full write-up of the work so far: **[Progress_Report.md](Progress_Report.md)**.
 | `RWPE_encoding.ipynb` | `graph_feature_preprocessor` (CPU; also runs on Kaggle) | Random-walk positional encoding (RWPE) per snapshot, k = 8 and 16: toy sanity test against PyG `AddRandomWalkPE`, edge-list check against the graph files, self-loop tables (why self-loops are dropped from P), compute via `rwpe_compute.py` with a per-step time / RAM / fill-in log, checks, diagnostics, value scale → `Data/rwpe/` |
 | `RWPE_fixed_architecture.ipynb` | Kaggle (GPU) | Same notebook for the node-encoding runs (`NODE_ENC = rwpe16` on configs 5 and 4 of every operator, all eight in one session); RWPE files from the Kaggle dataset `hi-small-rwpe`; results in `Outputs/RWPE/<FAMILY>/`, summary `batch_summary_rwpe.csv` per family |
 | `GFP_fixed_architecture.ipynb` | Kaggle (GPU) | Same notebook for the data-tuned GFP runs (`GFP_VARIANT = tuned` on configs 5 and 4 of every operator, all eight in one session); the tuned sheet from the Kaggle dataset `hi-small-gfp-tuned`, swapped into the GFP block at load time (graph files untouched); results in `Outputs/GFP_TUNED/<FAMILY>/`, summary `batch_summary_gfp_tuned.csv` per family; verdict in `Progress_Report.md` §7.6 |
+| `GIN_tuning.ipynb` | Kaggle (GPU) | Recipe tuning of the GIN family on config 2 (mp base / readout base), one knob at a time in a pre-registered order (normalisation → layers → FFN → pos_weight → learning rate → dropout: architecture first, regularisation last), 2 seeds per trial, selection on validation only, early stopping on cosine T_max 100; never builds a test loader; resumable across Kaggle sessions; freezes `Outputs/TUNING/GIN/recipe.json` (rules in `EXPERIMENTS.md` §2b) |
+| `GIN_tuning_final.ipynb` | Kaggle (GPU) | Retrains the frozen GIN recipe on the train + val graph (built in memory) for the frozen number of epochs, seeds 42–45, test scored once per seed at the frozen threshold, mean ± std over the four seeds and threshold-sensitivity tables → `Outputs/FINAL/GIN/retrain/` |
+| `GBT_fixed_features.ipynb` | `graph_feature_preprocessor` (CPU, local) | GBT cross-check: LightGBM on the same 93 inputs the GNNs see (81 edge features + the 6 + 6 entity one-hots of both endpoints), no message passing — hand-crafted graph features vs learned ones. One successive-halving search (x0 = 100, train rows only, scored on validation), then four seeds under the thesis protocol; results in `Outputs/GBT/`, search log in `Outputs/GBT/search/`, summaries `batch_summary_gbt.csv` and `seed_summary_gbt.csv`; verdict in `Progress_Report.md` §7.7 |
 
 `gnn_core.py` — everything shared by the operator notebooks: the fixed model template,
 `build_model(operator, …)`, loaders, the training loop with validation threshold sweep, metrics on
@@ -28,7 +31,15 @@ train / val / test, curves, saving and `invariant_params()`. Notebooks only set 
 config batch and paths. The `NODE_ENC` knob (`none | rwpe8 | rwpe16`) appends a pre-computed node
 encoding to the 6 entity columns; only `node_proj` widens. The `GFP_VARIANT` knob (`v0 | tuned`)
 replaces the 61 V0 GFP columns of `edge_attr` by the 64-column tuned sheet at load time, normalised
-with the same train-fit recipe; only the edge projections and the readout input widen.
+with the same train-fit recipe; only the edge projections and the readout input widen. The training recipe
+is a dict (`recipe=None` = the v1 constants, reproducing every finished run exactly); the tuning helpers
+(`run_tuning_trial`, `choose_winner`, `probe_depths`, `save_recipe` / `load_recipe`), the train + val graph
+(`make_trainval_graph`) and the final retrain (`run_final`) live in the same file.
+
+`gbt_core.py` — the GBT cross-check next to the GNNs: builds the 93-column row from the graph files,
+runs the successive-halving search (resumable `trials.csv`), trains the final seeds with validation
+checkpoints every 25 boosting rounds and writes the same result files as the GNN runs. Threshold sweep,
+metrics, loss diagnostic, curves and batch summary are imported from `gnn_core.py`, never copied.
 
 `rwpe_compute.py` — exact RWPE of one snapshot on CPU (scipy; P = D_out⁻¹ A without self-loops,
 step k = diag(Pᵏ), same maths as PyG `AddRandomWalkPE`), logging non-zeros, seconds and RAM per step.
