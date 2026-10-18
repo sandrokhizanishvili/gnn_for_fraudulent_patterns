@@ -1,0 +1,104 @@
+{
+  "2": {
+    "neighbors": [
+      100,
+      100
+    ],
+    "status": "ok (primary)",
+    "attempts": [
+      {
+        "list": "primary",
+        "neighbors": [
+          100,
+          100
+        ],
+        "train_s_per_batch": 0.07211489677429199,
+        "train_batches_per_epoch": 372,
+        "train_epoch_s": 26.82674160003662,
+        "train_peak_gb": 1.1649479866027832,
+        "val_predict_s": 10.016893148422241,
+        "val_peak_gb": 0.9010305404663086,
+        "epoch_estimate_s": 36.84363474845886,
+        "params": 241283,
+        "ratio_to_first_depth": 1.0
+      }
+    ]
+  },
+  "4": {
+    "neighbors": [
+      100,
+      100,
+      50,
+      50
+    ],
+    "status": "ok (primary)",
+    "attempts": [
+      {
+        "list": "primary",
+        "neighbors": [
+          100,
+          100,
+          50,
+          50
+        ],
+        "train_s_per_batch": 0.19712939262390136,
+        "train_batches_per_epoch": 372,
+        "train_epoch_s": 73.3321340560913,
+        "train_peak_gb": 3.1568751335144043,
+        "val_predict_s": 24.860697507858276,
+        "val_peak_gb": 1.5689210891723633,
+        "epoch_estimate_s": 98.19283156394958,
+        "params": 446085,
+        "ratio_to_first_depth": 2.6651233580600215
+      }
+    ]
+  },
+  "6": {
+    "neighbors": null,
+    "status": "dropped",
+    "attempts": [
+      {
+        "list": "primary",
+        "neighbors": [
+          100,
+          100,
+          50,
+          50,
+          25,
+          25
+        ],
+        "train_s_per_batch": 0.3252297520637512,
+        "train_batches_per_epoch": 372,
+        "train_epoch_s": 120.98546776771545,
+        "train_peak_gb": 5.12337064743042,
+        "val_predict_s": 41.51244401931763,
+        "val_peak_gb": 1.8002395629882812,
+        "epoch_estimate_s": 162.49791178703308,
+        "params": 650887,
+        "ratio_to_first_depth": 4.410474506558565
+      },
+      {
+        "list": "fallback",
+        "neighbors": [
+          100,
+          100,
+          25,
+          25,
+          10,
+          10
+        ],
+        "train_s_per_batch": 0.3248688101768494,
+        "train_batches_per_epoch": 372,
+        "train_epoch_s": 120.85119738578797,
+        "train_peak_gb": 4.975270748138428,
+        "val_predict_s": 55.400617837905884,
+        "val_peak_gb": 1.6467928886413574,
+        "epoch_estimate_s": 176.25181522369385,
+        "params": 650887,
+        "ratio_to_first_depth": 4.783779245099218
+      }
+    ]
+  },
+  "max_ratio": 3.0,
+  "reference_seconds": 36.84363474845886
+}

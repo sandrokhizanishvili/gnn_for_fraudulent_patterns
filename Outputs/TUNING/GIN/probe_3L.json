@@ -1,0 +1,31 @@
+{
+  "3": {
+    "neighbors": [
+      100,
+      100,
+      50
+    ],
+    "status": "ok (primary)",
+    "attempts": [
+      {
+        "list": "primary",
+        "neighbors": [
+          100,
+          100,
+          50
+        ],
+        "train_s_per_batch": 0.13506772518157958,
+        "train_batches_per_epoch": 372,
+        "train_epoch_s": 50.245193767547605,
+        "train_peak_gb": 2.145458698272705,
+        "val_predict_s": 16.205408334732056,
+        "val_peak_gb": 1.2866759300231934,
+        "epoch_estimate_s": 66.45060210227966,
+        "params": 343684,
+        "ratio_to_first_depth": 1.8035843248353567
+      }
+    ]
+  },
+  "max_ratio": 3.0,
+  "reference_seconds": 36.84363474845886
+}

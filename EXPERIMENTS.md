@@ -31,9 +31,14 @@ Mirrored on the Notion experiments page (kept in sync).
 - [x] GFP `tuned` batch (8 runs, `GFP_VARIANT = tuned`) trained on Kaggle, 5–6 Oct; results in
       `Progress_Report.md` §7.6 (ties for GIN, PNA, the Transformer and GAT-4; GAT-5 + tuned the
       only run above the tie band; V0 stays the default sheet, section 3 "GFP tuned runs")
-- [ ] GBT cross-check — LightGBM on the same 93 inputs, no message passing: one successive-halving
-      search (x0 = 100) on the train rows, then 4 seeds; runs locally on CPU
-      (`GBT_fixed_features.ipynb`, section 3 "GBT cross-check runs"); results → `Progress_Report.md` §7.7
+- [x] GBT cross-check — LightGBM on the same 93 inputs, no message passing: one successive-halving
+      search (x0 = 100) on the train rows, then 4 seeds; run locally on CPU, 17–18 Oct
+      (`GBT_fixed_features.ipynb`, section 3 "GBT cross-check runs"); results in `Progress_Report.md` §7.7
+      (test F1 level with the best GIN run, above GATv2, well below PNA and the Transformer)
+- [ ] GBT regularised batch (`GBT_VARIANT = reg`) — same 93 inputs; smaller trees, early stopping on the
+      weighted validation loss (patience 100), trials ranked by validation PR-AUC, 4 seeds; runs locally
+      (`GBT_reg_fixed_features.ipynb`, section 3 "GBT regularised runs"); the first batch stays as the
+      unregularised reference
 - [ ] **GIN recipe tuning** (decided 17 Oct, after the 13 Oct meeting) — the training recipe is tuned once
       per operator on config 2 and then frozen; GIN first, PNA / GATv2 / Transformer later with the same code
       and notebook template. Rules and stage tracker in section 2b; `GIN_tuning.ipynb` (Kaggle, 3–5 sessions)
@@ -84,7 +89,7 @@ dropout 0.3, identical training recipe — so only the aggregation rule differs.
 - [x] **GATv2** — attention decides which neighbours matter · `GAT_fixed_architecture.ipynb` · 7 runs
 - [x] **Graph Transformer** — attention with edge features over the sampled neighbourhood ·
       `TRANSFORMER_fixed_architecture.ipynb` · 7 runs
-- [ ] **No message passing — LightGBM** on the same features (hand-crafted graph features vs
+- [x] **No message passing — LightGBM** on the same features (hand-crafted graph features vs
       message passing) · `GBT_fixed_features.ipynb` · 1 search + 4 seeds (section 3, "GBT cross-check runs")
 
 **Two extra questions about message passing itself (optional)**
@@ -137,14 +142,20 @@ incumbent is the v1 recipe (dropout 0.3, no norm, 2 layers, no FFN, pos_weight 8
 
 **GIN stage tracker** (pointer = `Outputs/TUNING/GIN/<stage>/`, no numbers here):
 
-- [ ] Probe — depths 2 / 4 / 6 at BatchNorm + FFN → `Outputs/TUNING/GIN/probe.json`
-- [ ] Stage 1 · norm {none, BatchNorm, LayerNorm} → `Outputs/TUNING/GIN/s1_norm/`
-- [ ] Stage 2 · layers {2, 4, 6} → `Outputs/TUNING/GIN/s2_layers/`
-- [ ] Stage 3 · FFN {off, on} → `Outputs/TUNING/GIN/s3_ffn/`
-- [ ] Stage 4 · pos_weight {8, 16} → `Outputs/TUNING/GIN/s4_pos_weight/`
-- [ ] Stage 5 · LR {5e-4, 1e-3, 3e-3} → `Outputs/TUNING/GIN/s5_lr/`
+- [x] Probe — depths 2 / 4 / 6 at BatchNorm + FFN → `Outputs/TUNING/GIN/probe.json` (Kaggle, 17–18 Oct:
+      2 and 4 layers pass with their primary lists, 6 layers dropped by the 3× rule with both lists; depth 3
+      probed later for the edge rule → `probe_3L.json`)
+- [x] Stage 1 · norm {none, BatchNorm, LayerNorm} → `Outputs/TUNING/GIN/s1_norm/` — winner BatchNorm
+- [x] Stage 2 · layers {2, 4, 6} → `Outputs/TUNING/GIN/s2_layers/` — incumbent 2 layers kept (6 skipped by
+      the probe; edge trial 3 layers ran, no win)
+- [x] Stage 3 · FFN {off, on} → `Outputs/TUNING/GIN/s3_ffn/` — incumbent FFN off kept
+- [x] Stage 4 · pos_weight {8, 16} → `Outputs/TUNING/GIN/s4_pos_weight/` — incumbent 8 kept (edge trial 4
+      ran, no win)
+- [ ] Stage 5 · LR {5e-4, 1e-3, 3e-3} → `Outputs/TUNING/GIN/s5_lr/` (session 1 was cut inside the 5e-4 trial;
+      it is redone from scratch next session)
 - [ ] Stage 6 · dropout {0.2, 0.3, 0.4} → `Outputs/TUNING/GIN/s6_dropout/`
-- [ ] Edge-rule trials (only if triggered; listed here when they run)
+- [ ] Edge-rule trials (only if triggered): stage 2 → `s2_layers/bn_l3/` (done), stage 4 →
+      `s4_pos_weight/bn_pw4/` (done); stages 5–6 pending
 - [ ] Freeze → `Outputs/TUNING/GIN/recipe.json`, `trials_summary.csv`, `tuning_curves.png`
 
 ---
@@ -247,11 +258,11 @@ set; then frozen for the four seeds. Test is never used until the four final mod
 Runs land in `Outputs/GBT/<run>/`, the search log in `Outputs/GBT/search/`, the summaries in
 `Outputs/GBT/batch_summary_gbt.csv` and `seed_summary_gbt.csv`.*
 
-- [ ] **GBT search** · LightGBM, successive halving on the train rows, scored on validation → `Outputs/GBT/search/best_params.json` + `trials.csv`
-- [ ] **GBT-42** · all 93 features · seed 42 → `Outputs/GBT/lightgbm_readout-full_seed-42/` — the run compared with the single-seed GNN runs
-- [ ] **GBT-43** · all 93 features · seed 43 → `Outputs/GBT/lightgbm_readout-full_seed-43/`
-- [ ] **GBT-44** · all 93 features · seed 44 → `Outputs/GBT/lightgbm_readout-full_seed-44/`
-- [ ] **GBT-45** · all 93 features · seed 45 → `Outputs/GBT/lightgbm_readout-full_seed-45/`
+- [x] **GBT search** · LightGBM, successive halving on the train rows, scored on validation → `Outputs/GBT/search/best_params.json` + `trials.csv`
+- [x] **GBT-42** · all 93 features · seed 42 → `Outputs/GBT/lightgbm_readout-full_seed-42/` — the run compared with the single-seed GNN runs
+- [x] **GBT-43** · all 93 features · seed 43 → `Outputs/GBT/lightgbm_readout-full_seed-43/`
+- [x] **GBT-44** · all 93 features · seed 44 → `Outputs/GBT/lightgbm_readout-full_seed-44/`
+- [x] **GBT-45** · all 93 features · seed 45 → `Outputs/GBT/lightgbm_readout-full_seed-45/`
 
 **Decision rule, fixed in advance:** the four seeds give mean ± std; the GBT is set against the best
 run of every family and against configs 3 / 7 (GFP at the readout, nothing in message passing). Only
@@ -262,6 +273,33 @@ the 4-seed spread is a tie. Bank target encoding is re-verified as train-label-o
 point, not a target: different raw features, simple cycles ≤ 6 vs 10, truncated test window,
 validation-chosen threshold vs 0.5 (F1 at 0.5 is stored alongside), x0 = 100 vs 1000 with a narrower
 search space, LightGBM 4.6 vs 3.1.1.
+
+### GBT regularised runs — `GBT_VARIANT = reg` (`GBT_reg_fixed_features.ipynb`, local CPU)
+
+*Why: the first GBT batch memorises the train rows (train PR-AUC 1.00 against 0.55 on validation);
+its validation loss rises from round 200 on while validation F1 and PR-AUC keep creeping up, so any
+ranking metric keeps the last round. Same 93 inputs, split and protocol; what changes is the capacity
+and the stopping rule. Search space: leaves 7–63, `min_data_in_leaf` 200–2,000, L2 1–100, learning rate
+0.01–0.05, feature fraction 0.3–0.8 (bagging fraction 0.5–1, L1 0.01–10, `scale_pos_weight` 1–10 as
+before); up to 2,000 rounds with **early stopping on the weighted validation loss** (the loss the curves
+show, laundering rows weighted 8), patience 100 rounds: every trial and every final seed keeps its
+lowest-validation-loss round, and the threshold is swept on validation at that round. Search trials
+are ranked by **validation PR-AUC** (threshold-free) instead of F1. Same halving budget (x0 = 100,
+η = 2, r0 = 0.1), same four seeds. Runs land in `Outputs/GBT_REG/<run>/` (names end in `_gbt-reg`),
+the search log in `Outputs/GBT_REG/search/`, the summaries in `batch_summary_gbt_reg.csv` and
+`seed_summary_gbt_reg.csv`.*
+
+- [ ] **GBT-reg search** · LightGBM, successive halving with early stopping, ranked by validation PR-AUC → `Outputs/GBT_REG/search/best_params.json` + `trials.csv`
+- [ ] **GBT-reg-42** · all 93 features · seed 42 → `Outputs/GBT_REG/lightgbm_readout-full_seed-42_gbt-reg/` — the run compared with the single-seed GNN runs
+- [ ] **GBT-reg-43** · all 93 features · seed 43 → `Outputs/GBT_REG/lightgbm_readout-full_seed-43_gbt-reg/`
+- [ ] **GBT-reg-44** · all 93 features · seed 44 → `Outputs/GBT_REG/lightgbm_readout-full_seed-44_gbt-reg/`
+- [ ] **GBT-reg-45** · all 93 features · seed 45 → `Outputs/GBT_REG/lightgbm_readout-full_seed-45_gbt-reg/`
+
+**Decision rule, fixed in advance:** the regularised batch is the headline GBT in the comparison with
+the GNNs (the model whose train curve is informative); the first batch stays reported as the
+unregularised reference. Both are judged on test F1 and PR-AUC (the fair scores, four seeds); a gap
+inside the seed spread is a tie. The train / validation gap of the new batch is reported from the
+curves; if it does not close, that is stated, not hidden by picking a different round.
 
 ### Cross-checks (optional)
 
@@ -309,11 +347,23 @@ how much the frozen threshold matters. The GIN feature configs under the frozen 
 
 *Newest first. Unticked = in progress · ticked = finished and synced.*
 
+- [ ] **17–18 Oct** — GIN tuning session 1 (one 12 h Kaggle session): probe + stages 1–4 finished, stage 5
+      cut by the session limit (its unfinished trial is redone next session); results in
+      `Outputs/TUNING/GIN/`, decisions re-checked against the rule; incumbent after stage 4 = BatchNorm,
+      2 layers, no FFN, pos_weight 8; Notion synced
 - [ ] **17 Oct** — recipe tuning planned (after the 13 Oct meeting with Aris and Loris): one pass per
       operator on config 2, GIN first; rules, stages and tracker in section 2b, final-retrain rows in
       section 3b, train + val graph and `recipe.json` schema in the appendix; `gnn_core.py` changes and
       `GIN_tuning.ipynb` / `GIN_tuning_final.ipynb` to follow; Notion experiments page synced
-- [ ] **17 Oct** — GBT cross-check planned: `gbt_core.py` + `GBT_fixed_features.ipynb` (LightGBM on
+- [ ] **18 Oct** — GBT regularised batch planned: `GBT_VARIANT` knob in `gbt_core.py` (v1 reproduced
+      unchanged; `reg` = smaller search space, early stopping on the weighted validation loss with
+      patience 100, trials ranked by validation PR-AUC); `GBT_reg_fixed_features.ipynb`; block "GBT
+      regularised runs" in section 3; Notion synced
+- [x] **17–18 Oct** — GBT cross-check run: successive-halving search (193 fits, 5.8 h, winner 856 rounds ×
+      216 leaves) and the four seeds (22 min each) locally on 16 CPU threads; results, curves and
+      predictions in `Outputs/GBT/`, tables and verdict in `Progress_Report.md` §5.5 / §7.7 / §8; Notion
+      synced
+- [x] **17 Oct** — GBT cross-check planned: `gbt_core.py` + `GBT_fixed_features.ipynb` (LightGBM on
       the 93-column row, successive halving x0 = 100 on the train rows scored on validation, 4 seeds,
       thesis protocol, runs locally on CPU); block "GBT cross-check runs" in section 3, decision rule
       fixed in advance; Notion experiments page synced
@@ -429,6 +479,16 @@ at the last round (`history.csv`, `epoch` = round), the round with the best vali
 architecture-invariant block). Run name `lightgbm_readout-full_seed-<seed>`; `results.json` also holds
 `hyperparams` and `paper_comparison` (F1 at threshold 0.5 on val / test, the paper's decision rule).
 `best.txt` (the booster) and `predictions.csv` stay out of git.
+**GBT variants** (`gbt_core.VARIANTS`, knob `GBT_VARIANT`): `v1` = the first batch exactly as run (no early
+stopping, best-validation-F1 round, trials ranked by validation F1, `SEARCH_SPACE`); `reg` = `SEARCH_SPACE_REG`
+(leaves 7–63, `min_data_in_leaf` 200–2,000, L2 1–100, learning rate 0.01–0.05, feature fraction 0.3–0.8,
+`num_round` = 2,000 as a cap), early stopping with patience 100 on LightGBM's `binary_logloss` over a
+validation Dataset whose laundering rows carry weight 8 — the same minimum as `gnn_core.weighted_bce`, the
+loss of the curves — so `booster.best_iteration` is the kept round (`best_epoch`); the threshold is swept on
+validation at that round; trials ranked by `val_pr_auc`. `trials.csv` gains a `rounds` column (kept
+rounds); `results.json` rows carry `gbt_variant` (absent = v1) and the `hyperparams` block adds
+`early_stopping`; `history.csv` holds the 25-round checkpoints plus the kept round. Run
+name suffix `_gbt-reg`; outputs under `Outputs/GBT_REG/`.
 
 **Recipe tuning** (section 2b; `gnn_core.py`, `GIN_tuning.ipynb`, `GIN_tuning_final.ipynb`):
 - *Recipe dict.* `DEFAULT_RECIPE` = the v1 constants (hidden 128, 2 layers, dropout 0.3, norm none, FFN off,
