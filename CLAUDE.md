@@ -167,6 +167,12 @@ them here. Rules that apply when implementing:
   search space and row conventions are in the `EXPERIMENTS.md` appendix. Only test F1 is a fair
   score for these runs (validation picks hyperparameters, kept round and threshold); say so wherever
   the GBT is compared.
+  **`GBT_VARIANT` (v1 | reg, decided 18 Oct):** the v1 batch memorises the train rows (train PR-AUC
+  1.00), so a second, separately labelled batch `reg` (`GBT_reg_fixed_features.ipynb`,
+  `Outputs/GBT_REG/`, run names end in `_gbt-reg`) uses a smaller search space, early stopping on
+  the weighted validation loss (patience 100; the kept round = the lowest-loss round, threshold swept
+  there) and ranks search trials by validation PR-AUC. `reg` is the headline GBT once done; v1 stays
+  as the unregularised reference. `gbt_core.VARIANTS` holds both; v1 code paths are unchanged.
 
 ## 4. Evaluation protocol — never deviate
 
@@ -318,7 +324,12 @@ mirror both to their Notion pages. Mark superseded rows `SUPERSEDED`, never dele
   the Kaggle repo clone so committed trials are skipped on the next session. The final notebook loads
   `recipe.json` (and stops with a clear message if it is missing), builds the train + val graph in
   memory and runs `run_final` for seeds 42–45 (42 / 43 keep their tuning threshold, 44 / 45 the mean of the
-  two; test metrics reported as mean ± std over the four).
+  two; test metrics reported as mean ± std over the four). **This pair is committed without
+  outputs** (decided 18 Oct 2026): its executed form is several MB of inline curve images and logs,
+  which GitHub's 1 MB content limit blocks from being imported into Kaggle, and every number the
+  outputs show is already in `Outputs/TUNING/<FAMILY>/` (`history.csv`, `trial.json`, `curves.png`,
+  `stage_summary.csv`, `probe.json`) and `Outputs/FINAL/<FAMILY>/`; the operator notebooks keep their
+  outputs as before.
 - **`recipe=None` reproduces v1.** Every `gnn_core.py` entry point takes an optional recipe dict
   (`full_recipe`, `DEFAULT = the module constants`). After any change to `gnn_core.py`, the regression
   check is part of the local verification: `run_experiment(recipe=None)` on the smoke slice with the
