@@ -1,0 +1,50 @@
+{
+  "operator": "gin",
+  "cfg": {
+    "mp": "base",
+    "readout": "base"
+  },
+  "recipe": {
+    "hidden": 128,
+    "num_layers": 2,
+    "dropout": 0.3,
+    "norm": "batch",
+    "ffn": false,
+    "num_neighbors": [
+      100,
+      100
+    ],
+    "batch_size": 8192,
+    "epochs": 100,
+    "lr": 0.001,
+    "weight_decay": 1e-05,
+    "pos_weight": 8.0
+  },
+  "best_epoch": 34,
+  "tuning_seeds": [
+    42,
+    43
+  ],
+  "retrain_seeds": [
+    42,
+    43,
+    44,
+    45
+  ],
+  "thresholds": {
+    "42": 0.6528624892234802,
+    "43": 0.6556033492088318,
+    "44": 0.654232919216156,
+    "45": 0.654232919216156
+  },
+  "threshold_source": "tuning seeds: own validation threshold at best_epoch; other seeds: mean of the tuning seeds",
+  "val_f1_mean": 0.6085806996100344,
+  "val_f1_std": 0.018950428810741226,
+  "train_f1_mean": 0.5896203383724182,
+  "epochs_run": {
+    "42": 34,
+    "43": 44
+  },
+  "source_stage": "s6_dropout",
+  "source_trial": "bn"
+}

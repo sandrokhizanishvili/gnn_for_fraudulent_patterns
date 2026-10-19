@@ -328,7 +328,9 @@ mirror both to their Notion pages. Mark superseded rows `SUPERSEDED`, never dele
   the Kaggle repo clone so committed trials are skipped on the next session. The final notebook loads
   `recipe.json` (and stops with a clear message if it is missing), builds the train + val graph in
   memory and runs `run_final` for seeds 42–45 (42 / 43 keep their tuning threshold, 44 / 45 the mean of the
-  two; test metrics reported as mean ± std over the four). **This pair is committed without
+  two; test metrics reported as mean ± std over the four; secondary view per seed: the threshold re-swept
+  on the seen val rows and the thresholded metrics at it, `val_seen_threshold` / `seen_<split>_<metric>`, never the
+  headline — PR-AUC is threshold-free and read first). **This pair is committed without
   outputs** (decided 18 Oct 2026): its executed form is several MB of inline curve images and logs,
   which GitHub's 1 MB content limit blocks from being imported into Kaggle, and every number the
   outputs show is already in `Outputs/TUNING/<FAMILY>/` (`history.csv`, `trial.json`, `curves.png`,

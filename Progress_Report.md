@@ -1595,7 +1595,7 @@ The incumbent row (BatchNorm, 2 layers, no FFN, `pos_weight` 8, LR 1e-3, dropout
 
 ### 7.10 GIN v2 — final retrain on train + val with the frozen recipe (`GIN_tuning_final.ipynb`)
 
-*Pending: seeds 42–45, 34 epochs on the train + val graph (496 batches per epoch instead of 372 — ~33 % more update steps at the same per-epoch LR profile, reported as a limitation), test scored once per seed at the frozen threshold; test F1 and PR-AUC as mean ± std, threshold-sensitivity tables, validation reported as "seen". Results → `Outputs/FINAL/GIN/retrain/`.*
+*Pending: seeds 42–45, 34 epochs on the train + val graph (496 batches per epoch instead of 372 — ~33 % more update steps at the same per-epoch LR profile, reported as a limitation), test scored once per seed at the frozen threshold; test F1 and PR-AUC as mean ± std, threshold-sensitivity tables, validation reported as "seen"; next to the frozen threshold, per seed, the threshold re-swept on the seen validation rows and the test metrics at it (secondary view, never the headline; PR-AUC is threshold-free and read first). Results → `Outputs/FINAL/GIN/retrain/`.*
 
 ## 8 · Repository map
 

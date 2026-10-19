@@ -137,10 +137,10 @@ incumbent is the v1 recipe (dropout 0.3, no norm, 2 layers, no FFN, pos_weight 8
 | Train metrics during training | train split scored every 5th epoch and at the last one; validation every epoch |
 | Summary tables | `stage_summary.csv` / `trials_summary.csv`: one row per trial with every hyperparameter, best epoch, stopped epoch per seed, train and validation F1 / PR-AUC (mean ± std), the train − validation gap, winner flag. Caveat next to the gap: validation has 0.107 % laundering vs 0.075 % on train, so part of the gap is prevalence, not underfitting |
 | Freeze | `Outputs/TUNING/GIN/recipe.json` — knobs, neighbour lists, T_max, best epoch, thresholds for all four retrain seeds (42 and 43 their own at the best epoch; 44 and 45 the mean of the two), validation F1 mean ± std, source stage. The single source of the frozen numbers; no copy in code |
-| Final retrain | `GIN_tuning_final.ipynb`: train + val graph (built in memory, appendix), T_max = 100 unchanged, stop at the frozen best epoch, frozen per-seed threshold, seeds 42–45, test scored once per seed; reported: test metrics as mean ± std over the four seeds (F1, PR-AUC), threshold sensitivity (frozen −0.10 … +0.10 and 0.5), train / val metrics with val marked as seen in training |
+| Final retrain | `GIN_tuning_final.ipynb`: train + val graph (built in memory, appendix), T_max = 100 unchanged, stop at the frozen best epoch, frozen per-seed threshold, seeds 42–45, test scored once per seed; reported: test metrics as mean ± std over the four seeds (F1, PR-AUC), threshold sensitivity (frozen −0.10 … +0.10 and 0.5), train / val metrics with val marked as seen in training. Secondary view, stored next to it and never the headline (decided 19 Oct): per seed the threshold re-swept on the validation rows (trained on in this phase) and the thresholded metrics at it (`val_seen_threshold`, `seen_<split>_<f1|precision|recall>`, one extra row in `sensitivity.csv`), so the drift of a seen-data sweep is visible; PR-AUC, ROC-AUC and the top-5 % metrics are threshold-free, unaffected, and read first |
 | Known limitation | the train + val graph has 496 batches per epoch vs 372 in tuning, so stopping at the frozen epoch means ~33 % more update steps with the same per-epoch LR profile; reported, not corrected |
 | Not refit | GFP scalers and the bank target encoding stay fit on the train window (a consistent refit would change the val rows' features between phases) |
-| Afterwards | every GIN feature config reuses the frozen recipe (validation-chosen epoch and threshold per config, 3 seeds); PNA, GATv2 and the Transformer are tuned the same way, each in its own session block |
+| Afterwards | every GIN feature config reuses the frozen recipe (validation-chosen epoch and threshold per config, 4 seeds 42–45, mean ± std); PNA, GATv2 and the Transformer are tuned the same way, each in its own session block |
 
 **GIN stage tracker** (pointer = `Outputs/TUNING/GIN/<stage>/`, no numbers here):
 
@@ -309,7 +309,7 @@ curves; if it does not close, that is stated, not hidden by picking a different 
 - [x] **Gradient-boosted trees** on the same features, no message passing — does message passing add
       anything beyond engineered features? → planned as the "GBT cross-check runs" block above
 - [ ] **Seeds** — 3–4 random seeds on the winning runs, mean ± std; differences inside the seed
-      spread count as ties → covered by the tuned-recipe runs of section 3b (3 seeds)
+      spread count as ties → covered by the tuned-recipe runs of section 3b (4 seeds)
 
 ---
 

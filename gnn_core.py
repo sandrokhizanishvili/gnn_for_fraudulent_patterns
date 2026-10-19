@@ -965,7 +965,8 @@ def seed_summary(rows, out_root, filename='seed_summary.csv'):
     out = {'run': summary['run'].iloc[0], 'operator': summary['operator'].iloc[0], 'mp': summary['mp'].iloc[0],
            'readout': summary['readout'].iloc[0], 'n_seeds': len(summary),
            'seeds': ' '.join(str(s) for s in summary['seed'])}
-    for col in list(METRIC_COLS) + ['best_epoch', 'threshold']:
+    extra = [c for c in summary.columns if c.startswith('seen_') or c == 'val_seen_threshold']   # final retrain only
+    for col in list(METRIC_COLS) + ['best_epoch', 'threshold'] + extra:
         out[f'{col}_mean'] = float(summary[col].mean())
         out[f'{col}_std'] = float(summary[col].std(ddof=1)) if len(summary) > 1 else 0.0
     table = pd.DataFrame([out])
@@ -1351,8 +1352,10 @@ def run_final(operator, cfg, graphs, col_sets, node_dim, out_root, frozen, seed,
               node_enc='none', enc_dir=None, gfp_variant='v0'):
     '''Final retrain of one seed: train+val graph, stop at the frozen epoch, frozen threshold, every split scored once.
 
-    Writes <out_root>/<run>/seed-<s>/: results.json (+ phase, stop_epoch, frozen_threshold, val_seen),
-    history.csv, curves.png, sensitivity.csv, predictions.csv, final.pt. Skipped when results.json exists.
+    Writes <out_root>/<run>/seed-<s>/: results.json (+ phase, stop_epoch, frozen_threshold, val_seen, and the
+    secondary view val_seen_threshold / seen_<split>_<f1|precision|recall>: the threshold re-swept on the val rows,
+    which were trained on here, and the thresholded metrics at it — reported next to the frozen threshold, never
+    the headline), history.csv, curves.png, sensitivity.csv, predictions.csv, final.pt. Skipped when results.json exists.
     '''
     recipe, stop_epoch = frozen['recipe'], int(frozen['best_epoch'])
     threshold = float(frozen['thresholds'][str(seed)])
@@ -1387,6 +1390,16 @@ def run_final(operator, cfg, graphs, col_sets, node_dim, out_root, frozen, seed,
     row.update(phase='retrain', trained_on='train+val', stop_epoch=stop_epoch, frozen_threshold=threshold,
                val_seen=True)
     sensitivity = threshold_sensitivity(preds['test']['y'], preds['test']['prob'], threshold)
+    # secondary view, never the headline: the threshold re-swept on the val rows (seen in training here) and every
+    # split scored at it; thresholded metrics only (PR-AUC, ROC-AUC and the top-5 % metrics do not move)
+    seen_threshold, _ = best_f1_threshold(preds['val']['y'], preds['val']['prob'])
+    seen = {split: compute_metrics(preds[split]['y'], preds[split]['prob'], seen_threshold) for split in SPLITS}
+    row['val_seen_threshold'] = seen_threshold
+    row.update({f'seen_{split}_{m}': seen[split][m] for split in SPLITS for m in ('f1', 'precision', 'recall')})
+    sensitivity.append({'point': 'val seen sweep', 'threshold': seen_threshold, 'delta': float(seen_threshold - threshold),
+                        'f1': seen['test']['f1'], 'precision': seen['test']['precision'], 'recall': seen['test']['recall']})
+    print(f'threshold re-swept on the seen val rows: {seen_threshold:.3f} (frozen {threshold:.3f}) -> '
+          f'test F1 {seen["test"]["f1"]:.4f} vs {metrics["test"]["f1"]:.4f} at the frozen threshold')
     save_run(out_dir, row, recipe, extra={'threshold_sensitivity': sensitivity,
                                           'threshold_source': frozen['threshold_source']})
     pd.DataFrame(sensitivity).to_csv(f'{out_dir}/sensitivity.csv', index=False)
