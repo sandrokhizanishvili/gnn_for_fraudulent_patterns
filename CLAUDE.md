@@ -60,7 +60,8 @@ frozen; it is never tuned per feature config (`EXPERIMENTS.md` §2b holds the pr
 the stage tracker). **GIN is tuned and frozen (19 Oct): `Outputs/TUNING/GIN/recipe.json` = v1 with
 BatchNorm after each message-passing layer** (`h ← h + Dropout(ReLU(BatchNorm(conv(h))))`), everything
 else unchanged — 2 layers, hidden 128, dropout 0.3, no FFN, [100, 100], batch 8,192, Adam 1e-3 with
-cosine T_max 100, pos_weight 8, weight decay 1e-5 — trained for the frozen 34 epochs; the stages for
+cosine T_max 100, pos_weight 8, weight decay 1e-5 — trained for the frozen 34 epochs; the family's invariant
+parameter count under this recipe is **68,099** (67,587 + the two BatchNorm affines), identical across configs; the stages for
 layers, FFN, pos_weight, LR and dropout all kept the incumbent. Every GIN v2 run (`GIN_tuning_final.ipynb`,
 later the seven feature configs) loads that file; the finished v1 GIN runs stay as they are. PNA, GATv2
 and the Transformer keep v1 until they are tuned the same way. In `gnn_core.py`, `recipe=None`
@@ -327,7 +328,7 @@ mirror both to their Notion pages. Mark superseded rows `SUPERSEDED`, never dele
   loader, scores the train split every 5th epoch (`eval_train_every = 5`), and its `OUT_ROOT` sits inside
   the Kaggle repo clone so committed trials are skipped on the next session. The final notebook loads
   `recipe.json` (and stops with a clear message if it is missing), builds the train + val graph in
-  memory and runs `run_final` for seeds 42–45 (one frozen threshold for all four = the mean of the two tuning seeds'
+  memory and runs `run_final` for configs 2, 4, 5 and 6 × seeds 42–45 (the epoch and the one frozen threshold — the mean of the two tuning seeds'
   validation thresholds; test metrics reported as mean ± std over the four; secondary view per seed: the threshold re-swept
   on the seen val rows and the thresholded metrics at it, `val_seen_threshold` / `seen_<split>_<metric>`, never the
   headline — PR-AUC is threshold-free and read first). **This pair is committed without

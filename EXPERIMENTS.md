@@ -140,7 +140,7 @@ incumbent is the v1 recipe (dropout 0.3, no norm, 2 layers, no FFN, pos_weight 8
 | Final retrain | `GIN_tuning_final.ipynb`: train + val graph (built in memory, appendix), T_max = 100 unchanged, stop at the frozen best epoch, frozen per-seed threshold, seeds 42–45, test scored once per seed; reported: test metrics as mean ± std over the four seeds (F1, PR-AUC), threshold sensitivity (frozen −0.10 … +0.10 and 0.5), train / val metrics with val marked as seen in training. Secondary view, stored next to it and never the headline (decided 19 Oct): per seed the threshold re-swept on the validation rows (trained on in this phase) and the thresholded metrics at it (`val_seen_threshold`, `seen_<split>_<f1|precision|recall>`, one extra row in `sensitivity.csv`), so the drift of a seen-data sweep is visible; PR-AUC, ROC-AUC and the top-5 % metrics are threshold-free, unaffected, and read first |
 | Known limitation | the train + val graph has 496 batches per epoch vs 372 in tuning, so stopping at the frozen epoch means ~33 % more update steps with the same per-epoch LR profile; reported, not corrected |
 | Not refit | GFP scalers and the bank target encoding stay fit on the train window (a consistent refit would change the val rows' features between phases) |
-| Afterwards | every GIN feature config reuses the frozen recipe (validation-chosen epoch and threshold per config, 4 seeds 42–45, mean ± std); PNA, GATv2 and the Transformer are tuned the same way, each in its own session block |
+| Afterwards | the GIN feature configs with edge features in message passing — 2 (base / base), 4 (base+GFP / base+GFP), 5 (base / base+GFP), 6 (base / GFP only) — are retrained in `GIN_tuning_final.ipynb` exactly like config 2: train + val graph, the frozen epoch and the frozen threshold transferred unchanged from the config-2 tuning, 4 seeds 42–45 (mean ± std); configs 1, 3 and 7 (`mp = none`) are not rerun; PNA, GATv2 and the Transformer are tuned the same way, each in its own session block |
 
 **GIN stage tracker** (pointer = `Outputs/TUNING/GIN/<stage>/`, no numbers here):
 
@@ -319,17 +319,18 @@ curves; if it does not close, that is stated, not hidden by picking a different 
 and threshold, and scores test once per seed; summaries give mean ± std over the seeds. Run names keep the
 v1 convention; the seed is a sub-folder.*
 
-### GIN final retrain (`GIN_tuning_final.ipynb`, one Kaggle session)
+### GIN final retrain (`GIN_tuning_final.ipynb`, configs 2 / 4 / 5 / 6 × seeds 42–45, resumable across Kaggle sessions)
 
-- [ ] **GIN-2 v2 · seed 42** · base / base · frozen recipe → `Outputs/FINAL/GIN/retrain/gin_mp-base_readout-base_dir-in/seed-42/`
-- [ ] **GIN-2 v2 · seed 43** → `Outputs/FINAL/GIN/retrain/gin_mp-base_readout-base_dir-in/seed-43/`
-- [ ] **GIN-2 v2 · seed 44** → `Outputs/FINAL/GIN/retrain/gin_mp-base_readout-base_dir-in/seed-44/`
-- [ ] **GIN-2 v2 · seed 45** → `Outputs/FINAL/GIN/retrain/gin_mp-base_readout-base_dir-in/seed-45/`
-- [ ] Summaries → `Outputs/FINAL/GIN/retrain/batch_summary_retrain.csv`, `seed_summary_retrain.csv` (mean ± std over the four seeds); per-seed `sensitivity.csv`
+- [ ] **GIN-2 v2** · base / base · frozen recipe, 4 seeds → `Outputs/FINAL/GIN/retrain/gin_mp-base_readout-base_dir-in/seed-<s>/`
+- [ ] **GIN-4 v2** · base+GFP / base+GFP · same recipe, epoch and threshold, 4 seeds → `Outputs/FINAL/GIN/retrain/gin_mp-full_readout-full_dir-in/seed-<s>/`
+- [ ] **GIN-5 v2** · base / base+GFP · 4 seeds → `Outputs/FINAL/GIN/retrain/gin_mp-base_readout-full_dir-in/seed-<s>/`
+- [ ] **GIN-6 v2** · base / GFP only · 4 seeds → `Outputs/FINAL/GIN/retrain/gin_mp-base_readout-gfp_dir-in/seed-<s>/`
+- [ ] Summaries → `Outputs/FINAL/GIN/retrain/batch_summary_retrain.csv` (one row per run), `seed_summary_retrain.csv` (one row per config, mean ± std over the four seeds; also one file per config); per-run `sensitivity.csv`
 
 **Decision rule, fixed in advance:** nothing is chosen here. Test F1 mean ± std and PR-AUC over the four seeds are reported next
-to the v1 GIN-2 run (single seed, 20 epochs) with the protocol difference stated; the sensitivity table shows
-how much the frozen threshold matters. The GIN feature configs under the frozen recipe follow in a later block.
+to the v1 runs of the same configs (single seed, 20 epochs) with the protocol difference stated; the sensitivity table shows
+how much the frozen threshold matters. Configs 4, 5 and 6 reuse the epoch and the threshold tuned on config 2, so their
+numbers carry that transfer as a stated caveat; configs 1, 3 and 7 (no edge features in message passing) are not rerun.
 
 ---
 
