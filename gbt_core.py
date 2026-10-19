@@ -29,7 +29,7 @@ N_EDGES, N_TRAIN, N_VAL_END = 5_077_237, 3_046_342, 4_061_789   # Progress_Repor
 POSITIVES    = {'train': 2_297, 'val': 1_082, 'test': 1_143}
 PAPER_THRESHOLD = 0.5                 # the paper's decision rule, stored for comparison only
 
-# search space: practical LightGBM ranges (name: low, high, how to sample)
+# search space of the first batch (v1): practical LightGBM ranges (name: low, high, how to sample)
 SEARCH_SPACE = {
     'num_round':        (100,  1000, 'int'),
     'num_leaves':       (15,   255,  'int'),
@@ -41,9 +41,29 @@ SEARCH_SPACE = {
     'lambda_l2':        (0.01, 10.0, 'log'),
     'scale_pos_weight': (1.0,  10.0, 'float'),   # the paper's range
 }
+# search space of the regularised batch (reg): smaller trees, more rows per leaf, stronger L2, slower learning;
+# num_round is only a cap — early stopping on the validation loss decides the kept round
+SEARCH_SPACE_REG = {
+    'num_round':        (2000, 2000,  'int'),
+    'num_leaves':       (7,    63,    'int'),
+    'learning_rate':    (0.01, 0.05,  'log'),
+    'min_data_in_leaf': (200,  2000,  'int'),
+    'feature_fraction': (0.3,  0.8,   'float'),
+    'bagging_fraction': (0.5,  1.0,   'float'),
+    'lambda_l1':        (0.01, 10.0,  'log'),
+    'lambda_l2':        (1.0,  100.0, 'log'),
+    'scale_pos_weight': (1.0,  10.0,  'float'),
+}
+# GBT_VARIANT knob: v1 = the first batch (best-validation-F1 round, trials ranked by validation F1);
+# reg = regularised space, early stopping on the weighted validation loss (patience in rounds),
+# trials ranked by validation PR-AUC at the stopped round
+VARIANTS = {
+    'v1':  {'search_space': SEARCH_SPACE,     'early_stopping': None, 'select': 'val_f1'},
+    'reg': {'search_space': SEARCH_SPACE_REG, 'early_stopping': 100,  'select': 'val_pr_auc'},
+}
 FIXED_PARAMS = {'objective': 'binary', 'bagging_freq': 1, 'verbose': -1, 'num_threads': THREADS}
 DATASET_PARAMS = {'feature_pre_filter': False}   # lets one constructed Dataset serve trials with different min_data_in_leaf
-TRIAL_COLS = ['trial', 'round', 'fraction', 'n_rows', 'val_f1', 'threshold', 'val_pr_auc', 'seconds', 'params']
+TRIAL_COLS = ['trial', 'round', 'fraction', 'n_rows', 'val_f1', 'threshold', 'val_pr_auc', 'rounds', 'seconds', 'params']
 
 
 # ==================================================================================================
@@ -114,10 +134,10 @@ def split_arrays(data, split):
 # LightGBM wrappers
 # ==================================================================================================
 
-def sample_params(rng):
-    '''One random configuration from SEARCH_SPACE (ints uniform, floats uniform, log ranges log-uniform).'''
+def sample_params(rng, space=SEARCH_SPACE):
+    '''One random configuration from the search space (ints uniform, floats uniform, log ranges log-uniform).'''
     params = {}
-    for name, (low, high, kind) in SEARCH_SPACE.items():
+    for name, (low, high, kind) in space.items():
         if kind == 'int':
             params[name] = int(rng.integers(low, high + 1))
         elif kind == 'log':
@@ -132,13 +152,37 @@ def make_dataset(X, y):
     return lgb.Dataset(X, label=y, params=dict(DATASET_PARAMS), free_raw_data=False).construct()
 
 
-def fit_booster(params, dataset, seed, callbacks=None):
-    '''lgb.train with the fixed recipe + one sampled configuration; num_round is taken from params.'''
+def make_val_dataset(X_val, y_val, train_dataset):
+    '''The validation Dataset for early stopping: laundering rows weighted by POS_WEIGHT, so LightGBM's
+    binary_logloss on it has the same minimum as gnn_core.weighted_bce (the loss the curves show).'''
+    weight = np.where(y_val == 1, core.POS_WEIGHT, 1.0)
+    return lgb.Dataset(X_val, label=y_val, weight=weight, reference=train_dataset, params=dict(DATASET_PARAMS),
+                       free_raw_data=False).construct()
+
+
+def fit_booster(params, dataset, seed, callbacks=None, val_dataset=None, early_stopping=None):
+    '''lgb.train with the fixed recipe + one sampled configuration; num_round is taken from params.
+
+    With early_stopping (rounds of patience) the weighted validation logloss is watched and
+    booster.best_iteration is the round with the lowest loss; without it the fit runs num_round rounds.
+    '''
     lgb_params = dict(FIXED_PARAMS)
     lgb_params.update({k: v for k, v in params.items() if k != 'num_round'})
     lgb_params.update(DATASET_PARAMS)
     lgb_params['seed'] = seed
-    return lgb.train(lgb_params, dataset, num_boost_round=params['num_round'], callbacks=callbacks or [])
+    callbacks = list(callbacks or [])
+    valid_sets = []
+    if early_stopping:
+        lgb_params['metric'] = 'binary_logloss'
+        valid_sets = [val_dataset]
+        callbacks.append(lgb.early_stopping(early_stopping, first_metric_only=True, verbose=False))
+    return lgb.train(lgb_params, dataset, num_boost_round=params['num_round'], valid_sets=valid_sets,
+                     callbacks=callbacks)
+
+
+def kept_rounds(booster, params, early_stopping):
+    '''The number of trees a fit keeps: the lowest-validation-loss round with early stopping, else num_round.'''
+    return int(booster.best_iteration) if early_stopping else int(params['num_round'])
 
 
 def predict_booster(booster, X, num_iteration=None):
@@ -161,17 +205,21 @@ def halving_schedule(x0, eta, r0):
     return rounds
 
 
-def successive_halving(data, out_dir, x0=X0, eta=ETA, r0=R0, seed=core.SEED):
+def successive_halving(data, out_dir, x0=X0, eta=ETA, r0=R0, seed=core.SEED, variant='v1'):
     '''Pick the LightGBM configuration: random configs, each round keeps the best 1/eta on more train rows.
 
     Every round fits on the most recent `fraction` of the train rows and scores the full validation
-    set with the swept-threshold F1 (test is never touched). One line per (trial, round) goes to
+    set (test is never touched); the ranking metric is VARIANTS[variant]['select'] (v1: swept-threshold
+    F1; reg: PR-AUC at the early-stopped round). One line per (trial, round) goes to
     <out_dir>/trials.csv as soon as it finishes, so a stopped search resumes where it was. Returns
-    (best params, trials table); best = highest validation F1 of the last round, ties -> lower trial id.
+    (best params, trials table); best = highest ranking metric of the last round, ties -> lower trial id.
     '''
+    assert variant in VARIANTS, f'unknown GBT variant {variant!r}; choose from {tuple(VARIANTS)}'
+    space, select = VARIANTS[variant]['search_space'], VARIANTS[variant]['select']
+    early_stopping = VARIANTS[variant]['early_stopping']
     os.makedirs(out_dir, exist_ok=True)
     rng = np.random.default_rng(seed)
-    configs = {trial: sample_params(rng) for trial in range(x0)}
+    configs = {trial: sample_params(rng, space) for trial in range(x0)}
     config_path = f'{out_dir}/configs.json'
     if os.path.exists(config_path):
         saved = {int(k): v for k, v in json.load(open(config_path)).items()}
@@ -185,8 +233,10 @@ def successive_halving(data, out_dir, x0=X0, eta=ETA, r0=R0, seed=core.SEED):
     X_val, y_val = split_arrays(data, 'val')
     n_train = len(y_train)
     schedule = halving_schedule(x0, eta, r0)
-    print(f'successive halving: x0={x0} eta={eta} r0={r0} -> rounds {schedule} '
-          f'| {len(trials)} trial rows already logged')
+    print(f'successive halving ({variant}): x0={x0} eta={eta} r0={r0} -> rounds {schedule} | ranked by {select}'
+          f'{f" | early stopping on weighted val loss, patience {early_stopping}" if early_stopping else ""}'
+          f' | {len(trials)} trial rows already logged')
+    val_dataset = None
 
     alive = list(range(x0))
     for round_no, (n_alive, fraction) in enumerate(schedule, 1):
@@ -197,36 +247,43 @@ def successive_halving(data, out_dir, x0=X0, eta=ETA, r0=R0, seed=core.SEED):
         print(f'--- round {round_no}: {n_alive} configs on the last {n_rows:,} train rows '
               f'({fraction:.0%}, {int(y_train[start:].sum()):,} laundering) | {len(todo)} to fit')
         dataset = make_dataset(X_train[start:], y_train[start:]) if todo else None
+        if todo and early_stopping:
+            val_dataset = make_val_dataset(X_val, y_val, dataset)
         for trial in todo:
             t0 = time.time()
-            booster = fit_booster(configs[trial], dataset, seed)
-            p_val = predict_booster(booster, X_val)
+            booster = fit_booster(configs[trial], dataset, seed, val_dataset=val_dataset, early_stopping=early_stopping)
+            rounds = kept_rounds(booster, configs[trial], early_stopping)
+            p_val = predict_booster(booster, X_val, rounds)
             threshold, val_f1 = core.best_f1_threshold(y_val, p_val)
             row = {'trial': trial, 'round': round_no, 'fraction': fraction, 'n_rows': n_rows,
                    'val_f1': val_f1, 'threshold': threshold,
-                   'val_pr_auc': float(average_precision_score(y_val, p_val)),
+                   'val_pr_auc': float(average_precision_score(y_val, p_val)), 'rounds': rounds,
                    'seconds': time.time() - t0, 'params': json.dumps(configs[trial])}
             new_row = pd.DataFrame([row])
             new_row.to_csv(log_path, mode='a', header=not os.path.exists(log_path), index=False)
             trials = pd.concat([trials, new_row], ignore_index=True) if len(trials) else new_row
             print(f"trial {trial:3d} | val F1 {val_f1:.4f} @ {threshold:.3f} | PR-AUC {row['val_pr_auc']:.4f} | "
-                  f"{row['seconds']:.0f}s | leaves {configs[trial]['num_leaves']} rounds {configs[trial]['num_round']} "
+                  f"{row['seconds']:.0f}s | leaves {configs[trial]['num_leaves']} rounds {rounds} "
                   f"lr {configs[trial]['learning_rate']:.3f}")
             del booster
-        del dataset
+        del dataset, val_dataset
+        val_dataset = None
         gc.collect()
         this_round = trials[(trials['round'] == round_no) & trials['trial'].isin(alive)]
-        ranked = this_round.sort_values(['val_f1', 'trial'], ascending=[False, True])
+        ranked = this_round.sort_values([select, 'trial'], ascending=[False, True])
         alive = ranked['trial'].astype(int).tolist()
-        print(f'round {round_no} best: trial {alive[0]} val F1 {ranked["val_f1"].iloc[0]:.4f} | '
-              f'median {this_round["val_f1"].median():.4f} | {this_round["seconds"].sum() / 60:.1f} min')
+        print(f'round {round_no} best: trial {alive[0]} {select} {ranked[select].iloc[0]:.4f} | '
+              f'median {this_round[select].median():.4f} | {this_round["seconds"].sum() / 60:.1f} min')
 
     best_trial = alive[0]
     best_row = trials[(trials['trial'] == best_trial) & (trials['round'] == len(schedule))].iloc[0]
-    best = {'trial': int(best_trial), 'val_f1': float(best_row['val_f1']), 'threshold': float(best_row['threshold']),
+    best = {'trial': int(best_trial), 'variant': variant, 'select': select, 'early_stopping': early_stopping,
+            'val_f1': float(best_row['val_f1']), 'val_pr_auc': float(best_row['val_pr_auc']),
+            'threshold': float(best_row['threshold']), 'rounds': int(best_row['rounds']),
             'params': configs[best_trial], 'schedule': schedule, 'x0': x0, 'eta': eta, 'r0': r0, 'seed': seed}
     json.dump(best, open(f'{out_dir}/best_params.json', 'w'), indent=2)
-    print(f'best configuration: trial {best_trial} (validation F1 {best["val_f1"]:.4f} on the full train rows)')
+    print(f'best configuration: trial {best_trial} ({select} {best[select]:.4f} on the full train rows, '
+          f'{best["rounds"]} rounds)')
     print(json.dumps(configs[best_trial], indent=1))
     return configs[best_trial], trials
 
@@ -235,16 +292,19 @@ def successive_halving(data, out_dir, x0=X0, eta=ETA, r0=R0, seed=core.SEED):
 # one final run: checkpoints every CHECK_EVERY rounds, best-validation-F1 round kept, test scored once
 # ==================================================================================================
 
-def run_name_gbt(seed, feature_set=FEATURE_SET):
-    '''lightgbm_readout-<set>_seed-<seed> (CLAUDE.md §6).'''
-    return f'lightgbm_readout-{feature_set}_seed-{seed}'
+def run_name_gbt(seed, variant='v1', feature_set=FEATURE_SET):
+    '''lightgbm_readout-<set>_seed-<seed>[_gbt-<variant>] (CLAUDE.md §6); no suffix for the first batch (v1).'''
+    name = f'lightgbm_readout-{feature_set}_seed-{seed}'
+    if variant != 'v1':
+        name += f'_gbt-{variant}'
+    return name
 
 
-def gbt_result_row(name, seed, best_epoch, threshold, metrics):
+def gbt_result_row(name, seed, best_epoch, threshold, metrics, variant='v1'):
     '''The flat result row with every batch_summary.csv column; params = trees kept, invariant_params = 0.'''
     row = {'run': name, 'operator': 'lightgbm', 'mp': 'none', 'readout': FEATURE_SET, 'mp_direction': 'none',
-           'temporal_sampling': False, 'node_enc': 'none', 'gfp_variant': 'v0', 'seed': seed,
-           'best_epoch': best_epoch, 'threshold': threshold,
+           'temporal_sampling': False, 'node_enc': 'none', 'gfp_variant': 'v0', 'gbt_variant': variant,
+           'seed': seed, 'best_epoch': best_epoch, 'threshold': threshold,
            'params': best_epoch, 'invariant_params': 0}
     row.update(core.flatten_metrics(metrics))
     return row
@@ -282,14 +342,19 @@ def save_gbt_predictions(out_dir, data, probs, threshold):
     print(f'predictions: {len(table):,} rows -> {out_dir}/predictions.csv')
 
 
-def train_final(params, data, seed, out_root, check_every=CHECK_EVERY):
-    '''Train one seed with the chosen configuration, keep the best-validation-F1 round, score test once.
+def train_final(params, data, seed, out_root, check_every=CHECK_EVERY, variant='v1'):
+    '''Train one seed with the chosen configuration, keep one round, score test once.
 
-    Writes results.json, history.csv (one row per checkpoint, epoch = boosting round), curves.png,
-    predictions.csv and best.txt (the booster cut at the kept round) to <out_root>/<run>/.
-    A run whose results.json exists is skipped (resume). Returns the flat result row.
+    v1: the round with the best validation F1 among the checkpoints. reg: early stopping on the
+    weighted validation loss (patience VARIANTS['reg']['early_stopping']) decides the kept round, the
+    threshold is then swept on validation at that round. Writes results.json, history.csv (one row per
+    checkpoint, epoch = boosting round), curves.png, predictions.csv and best.txt (the booster cut at
+    the kept round) to <out_root>/<run>/. A run whose results.json exists is skipped (resume).
+    Returns the flat result row.
     '''
-    name = run_name_gbt(seed)
+    assert variant in VARIANTS, f'unknown GBT variant {variant!r}; choose from {tuple(VARIANTS)}'
+    early_stopping = VARIANTS[variant]['early_stopping']
+    name = run_name_gbt(seed, variant)
     out_dir = f'{out_root}/{name}'
     if os.path.exists(f'{out_dir}/results.json'):
         results = json.load(open(f'{out_dir}/results.json'))
@@ -297,7 +362,9 @@ def train_final(params, data, seed, out_root, check_every=CHECK_EVERY):
         return {k: v for k, v in results.items() if k not in ('hyperparams', 'paper_comparison')}
     os.makedirs(out_dir, exist_ok=True)
     print(f'=== {name} ===')
-    print(f'features: {data["X"].shape[1]} | seed {seed} | rounds {params["num_round"]} | checkpoint every {check_every}')
+    print(f'features: {data["X"].shape[1]} | seed {seed} | rounds {params["num_round"]}'
+          f'{f" (cap; early stopping on weighted val loss, patience {early_stopping})" if early_stopping else ""}'
+          f' | checkpoint every {check_every}')
 
     X_train, y_train = split_arrays(data, 'train')
     X_val, y_val = split_arrays(data, 'val')
@@ -305,17 +372,12 @@ def train_final(params, data, seed, out_root, check_every=CHECK_EVERY):
     checkpoints = set(range(check_every, num_round, check_every)) | {num_round}
     history, best, clock = [], {'val_f1': -1.0, 'epoch': 0, 'threshold': 0.5}, {'t0': time.time()}
 
-    def checkpoint(env):
-        k = env.iteration + 1
-        if k not in checkpoints:
-            return
-        p_train = predict_booster(env.model, X_train, k)
-        p_val = predict_booster(env.model, X_val, k)
+    def score_round(booster, k):
+        '''One history row at round k (train / val loss, F1 at the val threshold, PR-AUC, ROC-AUC).'''
+        p_train = predict_booster(booster, X_train, k)
+        p_val = predict_booster(booster, X_val, k)
         threshold, val_f1 = core.best_f1_threshold(y_val, p_val)
-        is_best = val_f1 > best['val_f1']
-        if is_best:
-            best.update(val_f1=val_f1, epoch=k, threshold=threshold)
-        history.append({
+        row = {
             'epoch':        k,
             'train_loss':   core.weighted_bce(y_train, p_train),
             'val_loss':     core.weighted_bce(y_val, p_val),
@@ -326,20 +388,43 @@ def train_final(params, data, seed, out_root, check_every=CHECK_EVERY):
             'val_roc_auc':  float(roc_auc_score(y_val, p_val)),
             'threshold':    threshold,
             'seconds':      time.time() - clock['t0'],
-        })
+        }
         clock['t0'] = time.time()
-        r = history[-1]
+        return row
+
+    def checkpoint(env):
+        k = env.iteration + 1
+        if k not in checkpoints:
+            return
+        r = score_round(env.model, k)
+        is_best = r['val_f1'] > best['val_f1']
+        if is_best:
+            best.update(val_f1=r['val_f1'], epoch=k, threshold=r['threshold'])
+        history.append(r)
         print(f"round {k:4d} | loss {r['train_loss']:.4f} / {r['val_loss']:.4f} | "
-              f"F1 {r['train_f1']:.4f} / {r['val_f1']:.4f} @ {threshold:.3f} | "
+              f"F1 {r['train_f1']:.4f} / {r['val_f1']:.4f} @ {r['threshold']:.3f} | "
               f"PR-AUC {r['train_pr_auc']:.4f} / {r['val_pr_auc']:.4f} | {r['seconds']:.0f}s   (train / val)"
-              + ('   * new best' if is_best else ''))
+              + ('   * new best' if is_best and not early_stopping else ''))
 
     dataset = make_dataset(X_train, y_train)
-    booster = fit_booster(params, dataset, seed, callbacks=[checkpoint])
-    del dataset
+    val_dataset = make_val_dataset(X_val, y_val, dataset) if early_stopping else None
+    booster = fit_booster(params, dataset, seed, callbacks=[checkpoint], val_dataset=val_dataset,
+                          early_stopping=early_stopping)
+    del dataset, val_dataset
+    if early_stopping:
+        # the kept round is the lowest-validation-loss round; the threshold is swept there
+        best_epoch = kept_rounds(booster, params, early_stopping)
+        if best_epoch not in {r['epoch'] for r in history}:
+            history.append(score_round(booster, best_epoch))
+            history.sort(key=lambda r: r['epoch'])
+        kept = next(r for r in history if r['epoch'] == best_epoch)
+        threshold = kept['threshold']
+        print(f'early stopping: lowest weighted validation loss {kept["val_loss"]:.4f} at round {best_epoch} '
+              f'(validation F1 {kept["val_f1"]:.4f}, threshold {threshold:.3f})')
+    else:
+        best_epoch, threshold = best['epoch'], best['threshold']
+        print(f'best validation F1 {best["val_f1"]:.4f} at round {best_epoch} (threshold {threshold:.3f})')
     pd.DataFrame(history).to_csv(f'{out_dir}/history.csv', index=False)
-    best_epoch, threshold = best['epoch'], best['threshold']
-    print(f'best validation F1 {best["val_f1"]:.4f} at round {best_epoch} (threshold {threshold:.3f})')
     booster.save_model(f'{out_dir}/best.txt', num_iteration=best_epoch)
 
     # final evaluation: the kept round, one validation-chosen threshold, test scored once
@@ -349,8 +434,9 @@ def train_final(params, data, seed, out_root, check_every=CHECK_EVERY):
         probs[split] = predict_booster(booster, X_split, best_epoch)
         metrics[split] = core.compute_metrics(y_split, probs[split], threshold)
         at_half[f'{split}_f1_at_0.5'] = float(f1_score(y_split, (probs[split] >= PAPER_THRESHOLD).astype(int)))
-    row = gbt_result_row(name, seed, best_epoch, threshold, metrics)
-    save_gbt_run(out_dir, row, params, at_half)
+    row = gbt_result_row(name, seed, best_epoch, threshold, metrics, variant)
+    hyperparams = dict(params, variant=variant, early_stopping=early_stopping)
+    save_gbt_run(out_dir, row, hyperparams, at_half)
     save_gbt_predictions(out_dir, data, probs, threshold)
     core.plot_curves(history, data['y'][data['rows']['test']], probs['test'], metrics['test']['pr_auc'],
                      best_epoch, name, f'{out_dir}/curves.png')

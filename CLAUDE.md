@@ -54,14 +54,18 @@ they are available). Never leave a number in one place that contradicts another.
 
 ## 3. The fixed architecture — never change it
 
-**Status (17 Oct 2026):** the table below is the **v1 recipe**, fixed a priori for every finished run.
+**Status (19 Oct 2026):** the table below is the **v1 recipe**, fixed a priori for every finished run.
 After the 13 Oct meeting the recipe is tuned **once per operator** on config 2 (base / base) and then
-frozen; it is never tuned per feature config. GIN goes first (`EXPERIMENTS.md` §2b holds the
-pre-registered rules and the stage tracker; `GIN_tuning.ipynb` → `Outputs/TUNING/GIN/recipe.json` →
-`GIN_tuning_final.ipynb`). Until that file exists every GIN run uses v1; PNA, GATv2 and the Transformer
-keep v1 until they are tuned. In `gnn_core.py`, `recipe=None` reproduces v1 exactly; a tuned run passes
-a recipe dict loaded from `recipe.json` (the only copy of the frozen numbers). This section is rewritten
-per operator when its recipe is frozen.
+frozen; it is never tuned per feature config (`EXPERIMENTS.md` §2b holds the pre-registered rules and
+the stage tracker). **GIN is tuned and frozen (19 Oct): `Outputs/TUNING/GIN/recipe.json` = v1 with
+BatchNorm after each message-passing layer** (`h ← h + Dropout(ReLU(BatchNorm(conv(h))))`), everything
+else unchanged — 2 layers, hidden 128, dropout 0.3, no FFN, [100, 100], batch 8,192, Adam 1e-3 with
+cosine T_max 100, pos_weight 8, weight decay 1e-5 — trained for the frozen 34 epochs; the stages for
+layers, FFN, pos_weight, LR and dropout all kept the incumbent. Every GIN v2 run (`GIN_tuning_final.ipynb`,
+later the seven feature configs) loads that file; the finished v1 GIN runs stay as they are. PNA, GATv2
+and the Transformer keep v1 until they are tuned the same way. In `gnn_core.py`, `recipe=None`
+reproduces v1 exactly; a tuned run passes the recipe dict loaded from `recipe.json` (the only copy of the
+frozen numbers). This note is extended per operator when its recipe is frozen.
 
 Fixed **a priori for ALL runs** (chosen so the 81-dim feature set is never compressed):
 

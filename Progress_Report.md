@@ -222,7 +222,7 @@ message-passing box differs. The table lists what is fixed and the knobs that ma
   accounts (degree up to 168k).
 - Edge features: `GINConv` when none enter message passing; `GINEConv` otherwise, with
   `m_u = ReLU(h_u + W_e·e_uv)` — `W_e` (128 × edge width) is the only extra weight.
-- Invariant parameters 67,587. **Status: 7 runs done → §7.**
+- Invariant parameters 67,587. **Status: 7 runs done → §7 (v1 recipe); recipe tuned and frozen on 19 Oct → §7.9 (v1 + BatchNorm after each layer, best epoch 34); final retrain pending → §7.10.**
 
 ### 5.2 GATv2 — attention aggregation
 
@@ -266,6 +266,31 @@ message-passing box differs. The table lists what is fixed and the knobs that ma
 - Invariant parameters 133,121: four 128 × 128 projections per layer (query, key, value, skip)
   where GATv2 has two.
 - **Status: 7 runs done → §7.4.**
+
+### 5.5 Gradient-boosted trees (LightGBM) — the no-message-passing cross-check
+
+- Rule: **no message passing**. LightGBM (Ke et al. 2017 [[12]](#references)) sees one row per
+  transaction: the same 81 edge columns the GNNs get (20 baseline + 61 GFP V0, exactly as stored in
+  the graph files) plus the entity one-hots of the sender and of the receiver (6 + 6) — 93 columns.
+  The only graph information is the pre-computed GFP block, so the contrast with §7.1–7.4 is
+  **hand-crafted graph features vs learned message passing on identical inputs**.
+- Same split and protocol as every GNN run (§4, §6): fit on the train rows, validation scored every
+  25 boosting rounds, the round with the best validation F1 kept with its threshold, test scored once,
+  every metric on every split, `predictions.csv` for every edge.
+- Hyperparameters chosen **once** by the paper's successive halving (Altman et al. 2023, Appendix C):
+  100 random configurations fitted on the most recent 10 % of the train rows → the best 50 on 20 % →
+  25 on 40 % → 12 on 80 % → 6 on the full train rows, each scored on the full validation set; the
+  winner is frozen for four seeds (42–45). Search space — practical LightGBM ranges, not the paper's
+  Table 10 (which goes to 16,384 leaves): rounds 100–1000, leaves 15–255, learning rate 0.01–0.1,
+  `min_data_in_leaf` 20–500, feature and bagging fraction 0.5–1, L1 / L2 0.01–10, `scale_pos_weight`
+  1–10.
+- Fairness: validation is used three times here (hyperparameters, kept round, threshold), so **only
+  test F1 is a fair score** for the trees; the paper's threshold-0.5 F1 is stored alongside.
+- Code `gbt_core.py` (threshold sweep, metrics, loss diagnostic, curves and batch summary imported
+  from `gnn_core.py`), notebook `GBT_fixed_features.ipynb`, runs locally on CPU (the one exception to
+  the Kaggle loop); artifacts in `Outputs/GBT/`.
+- `GBT_VARIANT` (v1 | reg): the first batch (v1, §7.7) memorises the train rows, so a second batch (reg, §7.8) searches a smaller space (leaves 7–63, 200–2,000 rows per leaf, L2 1–100), stops every fit on the weighted validation loss (patience 100) and ranks search trials by validation PR-AUC; same inputs, split, protocol, budget and seeds. reg is the headline GBT; v1 stays as the unregularised reference.
+- **Status: both batches done → §7.7 (v1), §7.8 (reg, headline).**
 
 ## 6 · Evaluation protocol
 
@@ -1379,6 +1404,199 @@ Validation F1 decides (gap < 0.02 = tie); test shown for completeness.
 - **Caveat:** single seed: the GATv2 gaps (+0.042 and +0.018 on validation, +0.016 and +0.034 on test) count only if they survive the seed cross-check. The 120 h sheet of §3 is worth computing only if the GATv2 gain survives the seed cross-check.
 - **Runtime (from the history logs):** 23–80 min per run, 6.2 h for the batch; PNA-4 + tuned slowest at 241 s per epoch, GIN-5 + tuned fastest at 70 s.
 
+### 7.7 GBT cross-check — LightGBM on the GNN inputs, no message passing (search + 4 seeds, 17–18 Oct)
+
+*Kept as the **unregularised reference**: this batch memorises the train rows (train PR-AUC 1.00). The headline GBT is the regularised batch of §7.8, which keeps the same inputs, split, protocol and budget and changes only the capacity and the stopping rule.*
+
+Does a tree model on the same 93 inputs (§5.5) match the GNNs, or does message passing add something beyond the hand-crafted graph features? One successive-halving search on the train rows (scored on validation), then four seeds with the chosen configuration under the thesis protocol. Run locally on 16 CPU threads from `GBT_fixed_features.ipynb`; artifacts in `Outputs/GBT/<run>/`, search log in `Outputs/GBT/search/` (`trials.csv`: every configuration × round with its validation F1; `best_params.json`). **Only test F1 is a fair score here**: validation picked the hyperparameters, the kept round and the threshold, so its F1 is optimistic; validation is shown for the overfitting check only. Before the run, the bank target encoding was re-verified as train-label-only (a train-only recomputation equals the stored columns exactly; a deliberately leaky all-rows version differs; one frozen value per bank in val / test).
+
+**Search — successive halving, train rows only, scored on validation**
+
+| Round | Configurations | Train rows used (most recent) | Best val F1 | Median val F1 | Mean fit | Round total |
+|---|---|---|---|---|---|---|
+| 1 | 100 | 304,634 (10 %) | 0.533 | 0.486 | 31 s | 51 min |
+| 2 | 50 | 609,268 (20 %) | 0.578 | 0.550 | 53 s | 44 min |
+| 3 | 25 | 1,218,537 (40 %) | 0.602 | 0.575 | 4.0 min | 101 min |
+| 4 | 12 | 2,437,074 (80 %) | 0.591 | 0.575 | 6.8 min | 81 min |
+| 5 | 6 | 3,046,342 (100 %) | 0.594 | 0.589 | 11.7 min | 70 min |
+
+- 193 fits, 5.8 h. Winner (trial 73): 856 rounds · 216 leaves · learning rate 0.027 · `min_data_in_leaf` 383 · feature fraction 0.73 · bagging fraction 0.58 · L1 0.035 · L2 5.26 · `scale_pos_weight` 1.40.
+- Five of the six finalists sit within 0.017 validation F1 of each other (0.577–0.594), the sixth at 0.528; the choice among the top five is within noise, so the result below does not hinge on this one configuration.
+- `scale_pos_weight` came out low (1.4 on a 1 : 1,300 imbalance); the validation threshold compensates (0.15–0.27 instead of 0.5).
+
+**Final runs — four seeds, chosen configuration, full train rows**
+
+| Run | Best round | Threshold | F1 train | F1 val | F1 test | Precision test | Recall test | PR-AUC test | Recall@5 % test | F1 test at 0.5 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| seed 42 (`lightgbm_readout-full_seed-42`) | 825 | 0.229 | 0.994 | 0.595 | **0.522** | 0.745 | 0.402 | 0.475 | 0.864 | 0.479 |
+| seed 43 | 725 | 0.219 | 0.991 | 0.590 | 0.510 | 0.692 | 0.404 | 0.468 | 0.859 | 0.490 |
+| seed 44 | 850 | 0.149 | 0.988 | 0.591 | 0.515 | 0.646 | 0.428 | 0.477 | 0.865 | 0.465 |
+| seed 45 | 625 | 0.266 | 0.981 | 0.592 | 0.522 | 0.743 | 0.402 | 0.475 | 0.864 | 0.482 |
+| **mean ± std** | 756 | 0.216 | 0.989 ± 0.006 | 0.592 ± 0.002 | **0.517 ± 0.006** | 0.707 ± 0.047 | 0.409 ± 0.013 | 0.474 ± 0.004 | 0.863 ± 0.003 | 0.479 ± 0.010 |
+
+Seed 42, all metrics, all splits (`Outputs/GBT/lightgbm_readout-full_seed-42/`; 825 trees kept of 856; 22 min per seed including the 35 validation checkpoints):
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.994 | 0.991 | 0.998 | 1.000 | 1.000 | 0.0151 | 1.000 |
+| val | 0.595 | 0.844 | 0.459 | 0.545 | 0.983 | 0.0188 | 0.881 |
+| test | **0.522** | 0.745 | 0.402 | 0.475 | 0.981 | 0.0195 | 0.864 |
+
+![LightGBM seed 42 — loss, F1, PR-AUC per boosting round (dashed = kept round), test PR curve](Outputs/GBT/lightgbm_readout-full_seed-42/curves.png)
+
+- **Overfitting, by the curves:** the trees memorise the train rows (train F1 0.99, train PR-AUC 1.00 — 216-leaf trees over 825 rounds), while validation F1 creeps up from 0.52 at round 25 to 0.59 from round 600 on, so the protocol keeps a late round in every seed (625–850 of 856). Validation loss is lowest at round 175–200 (0.024) and rises to 0.028 by the end while validation F1 still improves: the probabilities get more extreme, the ranking of the laundering rows keeps getting better. The train / validation gap is far larger than in any GNN run, yet the val → test drop is the usual one (PR-AUC 0.545 → 0.474; GIN-5: 0.549 → 0.484).
+- **Seeds:** the four seeds agree to ± 0.006 test F1 and ± 0.004 PR-AUC; the threshold moves between 0.15 and 0.27 and trades precision (0.65–0.75) against recall (0.40–0.43) without moving F1.
+
+**Against the GNNs — same 93 inputs, same split, same protocol (test is the fair column; GNN rows are single seed)**
+
+| Model | Edge features in MP | Readout | F1 val | F1 test | Precision test | Recall test | PR-AUC test | Recall@5 % test |
+|---|---|---|---|---|---|---|---|---|
+| **LightGBM, 4 seeds** | — (no message passing) | base+GFP + entity types | 0.592 ± 0.002 | **0.517 ± 0.006** | 0.707 | 0.409 | 0.474 | 0.863 |
+| GIN-3 | none | base+GFP | 0.548 | 0.471 | 0.635 | 0.374 | 0.435 | 0.861 |
+| GAT-3 | none | base+GFP | 0.524 | 0.469 | 0.615 | 0.379 | 0.419 | 0.853 |
+| PNA-3 | none | base+GFP | 0.574 | 0.512 | 0.680 | 0.410 | 0.472 | 0.865 |
+| TR-3 | none | base+GFP | 0.511 | 0.448 | 0.535 | 0.386 | 0.411 | 0.856 |
+| GIN-5 — best GIN | base | base+GFP | 0.609 | 0.525 | 0.678 | 0.429 | 0.484 | 0.867 |
+| GAT-4 — best GATv2 | base+GFP | base+GFP | 0.570 | 0.488 | 0.611 | 0.406 | 0.458 | 0.841 |
+| PNA-2 — best PNA | base | base | 0.651 | **0.614** | 0.776 | 0.507 | 0.578 | 0.881 |
+| TR-4 — best Transformer | base+GFP | base+GFP | 0.644 | **0.602** | 0.788 | 0.487 | 0.574 | 0.881 |
+
+- **Verdict:** with no message passing, trees on the same inputs reach test F1 0.517 ± 0.006 — level with the best GIN run (0.525, one seed, inside the GIN / GBT noise) and above the best GATv2 run (0.488), but 0.085–0.097 below the best PNA (0.614) and Transformer (0.602) runs, more than ten times the seed spread. On identical inputs, message passing with PNA or the Transformer adds something that the hand-crafted GFP features plus a tree model do not; message passing with GIN or GATv2 does not.
+- **Config 3 is the GNN closest to the tree setup** (GFP only at the readout, nothing but topology in message passing): every operator scores below the trees there (0.448–0.512 vs 0.517). A GNN that passes messages without edge features and reads GFP at the end is no better than a tree on the same features; the GNN gains come from the edge features inside message passing (configs 2, 4, 5), and only PNA and the Transformer turn them into a lead.
+- **Same shape of errors:** high precision (0.71) and recall 0.41 at the validation threshold, like every GNN; recall@5 % 0.863 sits on the same ceiling as the GNNs (0.84–0.88), so the hardest 12–16 % of laundering is missed by trees and GNNs alike (which patterns these are is the typology analysis, section 4 of `EXPERIMENTS.md`).
+- **PR-AUC says the same without any threshold:** trees 0.474, GIN-5 0.484, GAT-4 0.458 against PNA-2 0.578 and TR-4 0.574.
+- **Caveat:** the tree side has four seeds (spread 0.006), the GNN side one; the GIN / GBT tie and the GATv2 gap need the GNN seed sweep, the PNA / Transformer lead does not.
+
+**Against the paper (Altman et al. 2023 [[1]](#references), Table 2: GFP + LightGBM 62.86 ± 0.25 test F1 on HI-Small, threshold 0.5, four seeds)**
+
+| | This work | Paper |
+|---|---|---|
+| Test F1 | 0.517 ± 0.006 at the validation threshold · **0.479 ± 0.010 at threshold 0.5** | **0.629 ± 0.003** at threshold 0.5 |
+| Raw features | 20 engineered (log USD amount, structuring band, time cyclicals, gaps since the previous transaction, bank risk, format one-hot) + the 6 + 6 entity one-hots | not listed for the GBT; the paper's GNN code uses timestamp, amount received, received currency, payment format, no node features |
+| GFP | 61 columns: simple cycles ≤ 6, 24 h windows (scatter-gather 6 h), 8 statistics, bins [2, 3, 5]; the 52 vertex statistics clipped at the train 1st / 99th percentiles (the GNN inputs) | simple cycles ≤ 10, same windows, statistics and bins not listed; raw GFP output |
+| Test window | truncated at 10 Sep (laundering-only tail days removed) | full HI-Small |
+| Tuning | 100 configurations, practical ranges | 1,000 configurations, Table 10 ranges (leaves up to 16,384) |
+| Library | LightGBM 4.6.0 | LightGBM 3.1.1 |
+
+- The paper's number is a reference point, not a like-for-like target: the gap (0.15 at threshold 0.5) mixes feature, GFP, window and budget differences that cannot be separated from these runs.
+- The most concrete thing on our side that can cost a tree model is the **clipping of the 52 vertex statistics** at the train 1st / 99th percentiles: the GNN needed it for stable training, trees do not, and the extreme degrees, fan widths and amount sums are exactly where unusual accounts live. A second, separately labelled run on the unclipped sheet (the raw `edge_features.csv` values) is the clean follow-up; not done.
+- **Leakage check:** test ≤ validation in every seed and on every metric; the bank target encoding verified train-label-only (above); the GFP block is built from ids, time and amount only.
+- **Runtime (from the logs):** search 5.8 h for 193 fits, final runs 22 min per seed (fit plus 35 validation checkpoints), all on 16 CPU threads.
+
+### 7.8 GBT regularised batch — the headline GBT (`GBT_VARIANT = reg`, search + 4 seeds, 18 Oct)
+
+The first GBT batch (§7.7) memorises the train rows: train PR-AUC 1.00 against 0.55 on validation, and its validation loss rises from round 200 on while validation F1 and PR-AUC keep creeping up, so any ranking metric keeps the last round. This batch keeps everything else (the 93 inputs, the split, the protocol, the halving budget, the four seeds) and changes the capacity and the stopping rule: smaller trees (leaves 7–63, `min_data_in_leaf` 200–2,000, L2 1–100, learning rate 0.01–0.05, feature fraction 0.3–0.8), up to 2,000 rounds with **early stopping on the weighted validation loss** (the loss the curves show; patience 100 rounds) — every fit keeps its lowest-validation-loss round, the threshold is swept on validation at that round, and search trials are ranked by validation PR-AUC (threshold-free). Run locally on 16 CPU threads from `GBT_reg_fixed_features.ipynb`; artifacts in `Outputs/GBT_REG/<run>/` (run names end in `_gbt-reg`), search log in `Outputs/GBT_REG/search/`. **Only test F1 and PR-AUC are fair scores here**, as in §7.7.
+
+**Search — successive halving with early stopping, ranked by validation PR-AUC**
+
+| Round | Configurations | Train rows used (most recent) | Best val PR-AUC | Median val PR-AUC | Best val F1 | Median kept rounds | Mean fit | Round total |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 100 | 304,634 (10 %) | 0.507 | 0.478 | 0.543 | 293 | 12 s | 21 min |
+| 2 | 50 | 609,268 (20 %) | 0.543 | 0.528 | 0.582 | 374 | 21 s | 18 min |
+| 3 | 25 | 1,218,537 (40 %) | 0.555 | 0.538 | 0.587 | 486 | 38 s | 16 min |
+| 4 | 12 | 2,437,074 (80 %) | 0.550 | 0.543 | 0.591 | 555 | 76 s | 15 min |
+| 5 | 6 | 3,046,342 (100 %) | 0.548 | 0.539 | 0.590 | 855 | 113 s | 11 min |
+
+- 193 fits, 1.35 h (the first batch: 5.8 h) — small trees are cheap, and every fit stopped well before the 2,000-round cap.
+- Winner (trial 84): 25 leaves · learning rate 0.010 · `min_data_in_leaf` 545 · feature fraction 0.76 · bagging fraction 0.72 · L1 0.08 · L2 15.7 · `scale_pos_weight` 1.07; stopped at round 1,380 on the full train rows. The runner-up (trial 66, 0.541) is a near-twin; a 190-round configuration (trial 3) reaches 0.541 as well, so the result does not hinge on the exact winner.
+
+**Final runs — four seeds, chosen configuration, full train rows, early stopping**
+
+| Run | Kept round (of trained) | Threshold | F1 train | F1 val | F1 test | Precision test | Recall test | PR-AUC train | PR-AUC val | PR-AUC test | Recall@5 % test | F1 test at 0.5 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| seed 42 (`lightgbm_readout-full_seed-42_gbt-reg`) | 1,380 (1,475) | 0.262 | 0.563 | 0.590 | **0.525** | 0.694 | 0.423 | 0.542 | 0.548 | 0.482 | 0.867 | 0.501 |
+| seed 43 | 1,453 (1,550) | 0.234 | 0.568 | 0.590 | 0.525 | 0.675 | 0.430 | 0.547 | 0.549 | 0.485 | 0.871 | 0.505 |
+| seed 44 | 1,545 (1,625) | 0.229 | 0.572 | 0.588 | 0.521 | 0.648 | 0.436 | 0.554 | 0.549 | 0.484 | 0.870 | 0.505 |
+| seed 45 | 1,358 (1,450) | 0.189 | 0.565 | 0.586 | 0.509 | 0.596 | 0.444 | 0.539 | 0.546 | 0.482 | 0.867 | 0.507 |
+| **mean ± std** | 1,434 ± 84 | 0.228 | 0.567 ± 0.004 | 0.588 ± 0.002 | **0.520 ± 0.008** | 0.653 ± 0.042 | 0.433 ± 0.009 | 0.546 ± 0.006 | 0.548 ± 0.001 | **0.483 ± 0.001** | 0.869 ± 0.002 | 0.504 ± 0.003 |
+
+Seed 42, all metrics, all splits (`Outputs/GBT_REG/lightgbm_readout-full_seed-42_gbt-reg/`; 1,380 trees kept; 27–54 min per seed including the checkpoints):
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.563 | 0.835 | 0.425 | 0.542 | 0.993 | 0.0146 | 0.967 |
+| val | 0.590 | 0.832 | 0.457 | 0.548 | 0.984 | 0.0186 | 0.873 |
+| test | **0.525** | 0.694 | 0.423 | 0.482 | 0.982 | 0.0195 | 0.867 |
+
+![LightGBM regularised, seed 42 — loss, F1, PR-AUC per boosting round (dashed = kept round), test PR curve](Outputs/GBT_REG/lightgbm_readout-full_seed-42_gbt-reg/curves.png)
+
+- **The train / validation gap is closed:** train PR-AUC 0.54–0.55 against 0.55 on validation in every seed, train F1 0.56–0.57 against 0.59 — the same picture as the GNN runs (train is the window with the lowest laundering rate, so its F1 and PR-AUC sit below validation). Both loss curves fall and flatten; nothing turns upward. Early stopping cut every seed between rounds 1,358 and 1,545 of 1,450–1,625 trained.
+- **Seeds:** test F1 agrees to ± 0.008 and PR-AUC to ± 0.001; the threshold moves between 0.19 and 0.26 and trades precision (0.60–0.69) against recall (0.42–0.44) without moving F1.
+
+**Unregularised (§7.7) vs regularised — four-seed means**
+
+| | First batch (v1) | Regularised (reg) |
+|---|---|---|
+| Trees kept · leaves per tree | 756 · 216 | 1,434 · 25 |
+| PR-AUC train / val / test | 1.000 / 0.545 / 0.474 ± 0.004 | 0.546 / 0.548 / **0.483 ± 0.001** |
+| F1 train / val / test | 0.989 / 0.592 / 0.517 ± 0.006 | 0.567 / 0.588 / **0.520 ± 0.008** |
+| Precision / recall test | 0.707 / 0.409 | 0.653 / 0.433 |
+| F1 test at threshold 0.5 | 0.479 ± 0.010 | 0.504 ± 0.003 |
+
+- Same quality, honest curves: on test the regularised model ties the unregularised one on F1 (inside the seed spread) and is slightly better on PR-AUC and at the paper's 0.5 threshold, while its train metrics now mean something. The regularised batch is therefore the headline GBT from here on; §7.7 stays as the unregularised reference.
+
+**Against the GNNs — same 93 inputs, same split, same protocol (test is the fair column; GNN rows are single seed)**
+
+| Model | Edge features in MP | Readout | F1 val | F1 test | Precision test | Recall test | PR-AUC test | Recall@5 % test |
+|---|---|---|---|---|---|---|---|---|
+| **LightGBM regularised, 4 seeds** | — (no message passing) | base+GFP + entity types | 0.588 ± 0.002 | **0.520 ± 0.008** | 0.653 | 0.433 | 0.483 | 0.869 |
+| LightGBM first batch, 4 seeds (§7.7) | — | base+GFP + entity types | 0.592 ± 0.002 | 0.517 ± 0.006 | 0.707 | 0.409 | 0.474 | 0.863 |
+| GIN-5 — best GIN | base | base+GFP | 0.609 | 0.525 | 0.678 | 0.429 | 0.484 | 0.867 |
+| GAT-4 — best GATv2 | base+GFP | base+GFP | 0.570 | 0.488 | 0.611 | 0.406 | 0.458 | 0.841 |
+| PNA-2 — best PNA | base | base | 0.651 | **0.614** | 0.776 | 0.507 | 0.578 | 0.881 |
+| TR-4 — best Transformer | base+GFP | base+GFP | 0.644 | **0.602** | 0.788 | 0.487 | 0.574 | 0.881 |
+| PNA-3 — GFP at the readout only | none | base+GFP | 0.574 | 0.512 | 0.680 | 0.410 | 0.472 | 0.865 |
+
+- **Verdict (unchanged from §7.7, now on a model that does not memorise):** trees on the same inputs reach test F1 0.520 ± 0.008 and PR-AUC 0.483 — level with the best GIN run (0.525 / 0.484) and above the best GATv2 run (0.488 / 0.458), but 0.08–0.09 F1 and 0.09 PR-AUC below the best PNA (0.614 / 0.578) and Transformer (0.602 / 0.574) runs, more than ten times the seed spread. On identical inputs, message passing with PNA or the Transformer adds something that hand-crafted GFP features plus trees do not; message passing with GIN or GATv2 does not. Every GNN config 3 (GFP at the readout, nothing but topology in message passing) stays below the trees.
+- **Against the paper** (GFP + LightGBM 62.86 ± 0.25 at threshold 0.5): 0.504 ± 0.003 at 0.5 here; the setup differences of §7.7 apply unchanged (raw features, cycle cap 6 vs 10, clipped vertex statistics, truncated test window, budget, library). The test window is the largest of them: the 8 tail days we removed (11–18 Sep) hold 1,108 transactions of which 655 are laundering, and the paper's released split code puts them in test; a side check on 18–19 Oct that rebuilt those rows' features and scored these four boosters on test plus the tail gave 0.638 ± 0.005 at the validation threshold and 0.599 at 0.5 (0.653 ± 0.005 and 0.614 on the code's own 9–18 Sep window; the §7.7 boosters: 0.633 / 0.648), i.e. the window alone covers the gap. That check is not part of the protocol (features rebuilt outside the pipeline, numbers in no result file) and is reported only as the size of the effect.
+- **Runtime (from the logs):** search 1.35 h for 193 fits; final seeds 27–54 min each (fit plus checkpoints every 25 rounds), all on 16 CPU threads.
+
+### 7.9 GIN recipe tuning — one knob at a time on config 2 (2 seeds per trial, 17–19 Oct)
+
+Every run above uses the v1 recipe (2 layers, hidden 128, dropout 0.3, no normalisation after the layers, Adam 1e-3 with a 20-epoch cosine, `pos_weight` 8), fixed a priori and never tuned. After the 13 Oct meeting the recipe is tuned **once per operator on config 2 (base / base)** and then frozen for every feature config of that operator; GIN goes first. The protocol was written down before the first run (`EXPERIMENTS.md` §2b): hyperparameters are tuned **sequentially, one at a time, in a pre-registered order, selected on validation only** — normalisation → depth → FFN → `pos_weight` → learning rate → dropout (architecture first, regularisation last); Luo et al. (2024) and GNN+ (2025) also used non-exhaustive searches. Each trial trains seeds 42 and 43 with cosine T_max 100 and early stopping (3-epoch moving average of validation F1 flat for 10 epochs, never before epoch 20); its score is the seed-mean validation F1 at the best epoch of the smoothed seed-mean curve; a challenger replaces the incumbent only if it wins by more than max(0.01, the larger seed std), ties go to the simpler incumbent, and a winner at the edge of its grid triggers one extra trial one step beyond. Train and validation are scored from the checkpoints at that epoch, so the train / validation gap is comparable across trials. The test split is never loaded. Everything runs from `GIN_tuning.ipynb` through `gnn_core.py` (`run_tuning_trial`, `choose_winner`, `probe_depths`, `save_recipe`); artifacts in `Outputs/TUNING/GIN/`.
+
+**Probe — which depths fit the budget** (heaviest setting BatchNorm + FFN, 20 timed training batches after warm-up plus one full validation pass; pass = fits the T4 and ≤ 3× the 2-layer epoch)
+
+| Depth | Neighbours per hop | Train s / batch | Peak GPU train | Val pass | Peak GPU val | Epoch estimate | × 2-layer | Verdict |
+|---|---|---|---|---|---|---|---|---|
+| 2 | [100, 100] | 0.072 | 1.16 GB | 10.0 s | 0.90 GB | 36.8 s | 1.00 | ok |
+| 3 (edge trial) | [100, 100, 50] | 0.135 | 2.15 GB | 16.2 s | 1.29 GB | 66.5 s | 1.80 | ok |
+| 4 | [100, 100, 50, 50] | 0.197 | 3.16 GB | 24.9 s | 1.57 GB | 98.2 s | 2.67 | ok |
+| 6 | [100, 100, 50, 50, 25, 25] | 0.325 | 5.12 GB | 41.5 s | 1.80 GB | 162.5 s | 4.41 | dropped |
+| 6, fallback | [100, 100, 25, 25, 10, 10] | 0.325 | 4.98 GB | 55.4 s | 1.65 GB | 176.3 s | 4.78 | dropped |
+
+- Memory is never the limit on the T4 (≤ 5.1 GB of 15); time is. Six layers cost 4.4× the 2-layer epoch with either neighbour list, so the depth was dropped before any trial and stage 2 compared 2 against 4 layers only (plus the 3-layer edge trial). Measured epochs in training (validation scored every epoch, train every 5th) were 56–58 s for 2 layers, 87 s for 3, 119 s for 4.
+
+**Stages — seed-mean at the trial's best epoch (seeds 42, 43; validation prevalence 0.107 % vs train 0.075 %, so a negative gap is partly prevalence)**
+
+| Stage · trial | What changes | Val F1 | Val PR-AUC | Train F1 | Best epoch | Stopped (42 / 43) | Thresholds (42 / 43) | Decision |
+|---|---|---|---|---|---|---|---|---|
+| 1 · none (v1) | — | 0.557 ± 0.037 | 0.499 ± 0.044 | 0.539 | 20 | 20 / 33 | 0.460 / 0.521 | start |
+| **1 · BatchNorm** | Norm after each MP layer | **0.609 ± 0.019** | **0.540 ± 0.019** | 0.590 | 34 | 34 / 44 | 0.653 / 0.656 | **wins (+0.052 > margin 0.037)** |
+| 1 · LayerNorm | " | 0.603 ± 0.035 | 0.543 ± 0.042 | 0.600 | 23 | 34 / 29 | 0.735 / 0.574 | 0.006 behind BatchNorm |
+| 2 · 4 layers | [100, 100, 50, 50] | 0.598 ± 0.008 | 0.526 ± 0.012 | 0.581 | 30 | 30 / 51 | 0.517 / 0.642 | no (−0.011) |
+| 2 · 3 layers (edge) | [100, 100, 50] | 0.575 ± 0.002 | 0.510 ± 0.019 | 0.546 | 18 | 20 / 39 | 0.500 / 0.495 | no (−0.034) |
+| 3 · FFN on | GNN+ block after each layer | 0.602 ± 0.011 | 0.533 ± 0.023 | 0.563 | 24 | 35 / 27 | 0.633 / 0.481 | no (−0.007) |
+| 4 · pos_weight 16 | — | 0.596 ± 0.005 | 0.538 ± 0.022 | 0.578 | 32 | 42 / 43 | 0.784 / 0.798 | no (−0.013) |
+| 4 · pos_weight 4 (edge) | — | 0.582 ± 0.001 | 0.521 ± 0.017 | 0.573 | 28 | 31 / 46 | 0.365 / 0.454 | no (−0.026) |
+| 5 · LR 5e-4 | — | 0.563 ± 0.025 | 0.506 ± 0.029 | 0.584 | 33 | 33 / 55 | 0.600 / 0.560 | no (−0.046) |
+| 5 · LR 3e-3 | — | 0.597 ± 0.005 | 0.533 ± 0.002 | 0.558 | 22 | 42 / 30 | 0.506 / 0.647 | no (−0.012) |
+| 6 · dropout 0.2 | — | 0.584 ± 0.006 | 0.522 ± 0.003 | 0.593 | 32 | 44 / 39 | 0.577 / 0.719 | no (−0.024) |
+| 6 · dropout 0.4 | — | 0.596 ± 0.010 | 0.522 ± 0.014 | 0.579 | 30 | 42 / 40 | 0.477 / 0.606 | no (−0.013) |
+
+The incumbent row (BatchNorm, 2 layers, no FFN, `pos_weight` 8, LR 1e-3, dropout 0.3) is the same trial in stages 2–6; its scoring is copied, not retrained. Full columns in `Outputs/TUNING/GIN/trials_summary.csv`, per-stage tables in `s<k>_<knob>/stage_summary.csv`, curves in `tuning_curves.png`.
+
+**Frozen recipe (`Outputs/TUNING/GIN/recipe.json`, 19 Oct):** v1 + BatchNorm after each message-passing layer (`h ← h + Dropout(ReLU(BatchNorm(conv(h))))`); 2 layers, hidden 128, dropout 0.3, no FFN, [100, 100], batch 8,192, Adam 1e-3 with cosine T_max 100, weight decay 1e-5, `pos_weight` 8; **best epoch 34**; validation thresholds 0.653 (seed 42) and 0.656 (seed 43), their mean 0.654 for the retrain seeds 44 and 45; tuning score val F1 0.609 ± 0.019, PR-AUC 0.540 ± 0.019.
+
+- **One knob mattered.** Normalisation after the layers is the only change that cleared the margin: +0.052 validation F1 over the v1 recipe, seed spread halved (0.037 → 0.019), train F1 0.539 → 0.590, and the best epoch moved from 20 to 34 — with T_max 100 instead of 20 the model simply trains longer before validation F1 plateaus. LayerNorm did almost the same (0.603) with twice the seed spread; BatchNorm is kept as the higher of the two. The v1 run GIN-2 of §7.1.2 (20-epoch cosine, seed 42) had validation F1 0.553; the v1 recipe under the tuning protocol (100-epoch cosine, early stopping, two seeds) gives 0.557 ± 0.037, so the schedule and the seed matter as much as the missing normalisation when single runs are compared.
+- **Everything else lost, by 0.01–0.05.** Deeper networks are worse and dearer (3 layers 0.575, 4 layers 0.598 at 2.1× the epoch); the GNN+ FFN block adds 2.2× the parameters for −0.007; `pos_weight` moves the threshold (0.65 at 8, 0.78–0.80 at 16, 0.37–0.45 at 4) but not the F1; a larger learning rate peaks earlier (epoch 22) and lower, a smaller one is slowest and worst; dropout 0.2 memorises more (train F1 0.593, the only trial with train above validation) without helping validation, 0.4 helps nothing. No winner sat at a grid edge in stages 5–6, so no edge trials were triggered there.
+- **Read with the rule in mind.** The margin is max(0.01, the larger seed std), and the incumbent's std was 0.019 from stage 1 on, so a challenger needed ≥ +0.02 to win: the rule is conservative by design and prefers the simpler incumbent. Two seeds per trial leave the ranking among the 0.58–0.60 challengers unresolved; only the BatchNorm gain is clearly outside the spread. Selection used validation only; the test number of this recipe comes from the final retrain of §7.10 (train + val graph, 4 seeds, frozen epoch and thresholds), not from here.
+- **Runtime (from the Kaggle logs, T4):** session 1 (17–18 Oct) 12 h — probe, stages 1–4 and the first trial of stage 5, cut by the session cap; session 2 (18–19 Oct) 5.4 h — stage 5 (2.6 h) and stage 6 (2.7 h), the cut trial redone from scratch, the probe re-run with the same verdict. 15 trials (11 trained, the incumbent copied 5 times), 2 seeds each, 20–55 epochs per seed, ≈ 17.4 GPU hours in all.
+
+### 7.10 GIN v2 — final retrain on train + val with the frozen recipe (`GIN_tuning_final.ipynb`)
+
+*Pending: seeds 42–45, 34 epochs on the train + val graph (496 batches per epoch instead of 372 — ~33 % more update steps at the same per-epoch LR profile, reported as a limitation), test scored once per seed at the frozen threshold; test F1 and PR-AUC as mean ± std, threshold-sensitivity tables, validation reported as "seen". Results → `Outputs/FINAL/GIN/retrain/`.*
+
 ## 8 · Repository map
 
 | File | Content |
@@ -1393,11 +1611,17 @@ Validation F1 decides (gap < 0.02 = tie); test shown for completeness.
 | `RWPE_encoding.ipynb` / `rwpe_compute.py` | RWPE node encoding per snapshot (toy sanity test against PyG `AddRandomWalkPE`, edge-list check against the graph files, self-loop tables, per-step time / RAM / fill-in log, checks, diagnostics, value scale); the script does the exact scipy computation, CPU only, locally or on Kaggle → `Data/rwpe/rwpe_k{8,16}_{train,val,test}.pt` |
 | `RWPE_fixed_architecture.ipynb` | the same Kaggle notebook for the node-encoding runs of §7.5: config entries carry `operator` and `node_enc` (all eight runs in one session), RWPE files from the Kaggle dataset `hi-small-rwpe`; summary `batch_summary_rwpe.csv` per family |
 | `GFP_fixed_architecture.ipynb` | the same Kaggle notebook for the data-tuned GFP runs of §7.6: config entries carry `operator` and `gfp_variant` (all eight runs in one session), the tuned sheet from the Kaggle dataset `hi-small-gfp-tuned` swapped into the GFP block at load time; summary `batch_summary_gfp_tuned.csv` per family |
+| `GBT_fixed_features.ipynb` / `GBT_reg_fixed_features.ipynb` / `gbt_core.py` | the GBT cross-check of §7.7 (first batch) and §7.8 (regularised batch, `GBT_VARIANT = reg`): LightGBM on the same 93 inputs, no message passing; `gbt_core.py` builds the row from the graph files, runs the resumable successive-halving search and the final seeds with validation checkpoints, and imports threshold sweep, metrics, curves and batch summary from `gnn_core.py`; runs locally on CPU |
+| `GIN_tuning.ipynb` / `GIN_tuning_final.ipynb` | recipe tuning of §7.9 (config 2, six pre-registered stages, 2 seeds per trial, resumable across Kaggle sessions, never loads test; committed without outputs — every number is in `Outputs/TUNING/GIN/`) and the final retrain of §7.10 (train + val graph built in memory, seeds 42–45, frozen epoch and thresholds); the tuning helpers (`run_tuning_trial`, `choose_winner`, `probe_depths`, `save_recipe` / `load_recipe`, `make_trainval_graph`, `run_final`) live in `gnn_core.py` |
+| `Outputs/TUNING/GIN/` | `probe.json`, `probe_3L.json`; per stage `s<k>_<knob>/<trial>/trial.json` + `seed-<s>/history.csv`, `curves.png` and `stage_summary.csv`; `trials_summary.csv`, `tuning_curves.png`; **`recipe.json`** — the frozen GIN recipe, the only copy of its numbers |
+| `Outputs/FINAL/GIN/retrain/<run>/seed-<s>/` | (pending, §7.10) `results.json`, `history.csv`, `curves.png`, `sensitivity.csv`, `predictions.csv` (not versioned) • `batch_summary_retrain.csv`, `seed_summary_retrain.csv` |
 | `run_gfp_wsl.py` | causal batched GFP bridge (Windows snapml lacks GFP → runs in WSL) |
 | `Progress_Report.md` / `EXPERIMENTS.md` | markdown mirrors of this page (with the reference list) and of the experiments page — Notion is the main copy |
 | `Outputs/<FAMILY>/<run>/` (GIN, GAT, PNA, TRANSFORMER) | results.json (all splits, all metrics), history.csv, curves.png, best.pt, predictions.csv (the last two not versioned) • batch_summary.csv per batch |
 | `Outputs/RWPE/<FAMILY>/<run>/` | the same files for the node-encoding runs (§7.5) • batch_summary_rwpe.csv per family |
 | `Outputs/GFP_TUNED/<FAMILY>/<run>/` | the same files for the data-tuned GFP runs (§7.6) • batch_summary_gfp_tuned.csv per family |
+| `Outputs/GBT/<run>/` | the same files for the four LightGBM seeds of §7.7 (`best.txt` = the booster, not versioned) • `search/` (`configs.json`, `trials.csv`, `best_params.json`) • `batch_summary_gbt.csv`, `seed_summary_gbt.csv` |
+| `Outputs/GBT_REG/<run>/` | the same files for the four regularised seeds of §7.8 (run names end in `_gbt-reg`) • `search/` • `batch_summary_gbt_reg.csv`, `seed_summary_gbt_reg.csv` |
 | `Data/gfp_variants/` (not versioned) | `tuned.npy` (float32 [5,077,237, 64]) + `tuned_cols.json`, rows aligned with `edge_features.csv`; uploaded to Kaggle as the dataset `hi-small-gfp-tuned` |
 | `Data/rwpe/` (not versioned) | `rwpe_k{8,16}_{train,val,test}.pt` (float32 [515,070, k]) + per-step logs; uploaded to Kaggle as the dataset `hi-small-rwpe` |
 
@@ -1416,3 +1640,4 @@ Validation F1 decides (gap < 0.02 = tie); test shown for completeness.
 9. **S. Brody, U. Alon, E. Yahav.** *How Attentive are Graph Attention Networks?* ICLR 2022 (GATv2).
 10. **G. Corso, L. Cavalleri, D. Beaini, P. Liò, P. Veličković.** *Principal Neighbourhood Aggregation for Graph Nets.* NeurIPS 2020 (PNA).
 11. **Y. Shi, Z. Huang, S. Feng, H. Zhong, W. Wang, Y. Sun.** *Masked Label Prediction: Unified Message Passing Model for Semi-Supervised Classification.* IJCAI 2021 (`TransformerConv`).
+12. **G. Ke, Q. Meng, T. Finley, T. Wang, W. Chen, W. Ma, Q. Ye, T.-Y. Liu.** *LightGBM: A Highly Efficient Gradient Boosting Decision Tree.* NeurIPS 2017.

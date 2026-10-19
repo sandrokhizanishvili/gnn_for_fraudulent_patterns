@@ -35,15 +35,17 @@ Mirrored on the Notion experiments page (kept in sync).
       search (x0 = 100) on the train rows, then 4 seeds; run locally on CPU, 17–18 Oct
       (`GBT_fixed_features.ipynb`, section 3 "GBT cross-check runs"); results in `Progress_Report.md` §7.7
       (test F1 level with the best GIN run, above GATv2, well below PNA and the Transformer)
-- [ ] GBT regularised batch (`GBT_VARIANT = reg`) — same 93 inputs; smaller trees, early stopping on the
-      weighted validation loss (patience 100), trials ranked by validation PR-AUC, 4 seeds; runs locally
-      (`GBT_reg_fixed_features.ipynb`, section 3 "GBT regularised runs"); the first batch stays as the
-      unregularised reference
+- [x] GBT regularised batch (`GBT_VARIANT = reg`) — same 93 inputs; smaller trees, early stopping on the
+      weighted validation loss (patience 100), trials ranked by validation PR-AUC, 4 seeds; run locally,
+      18 Oct (`GBT_reg_fixed_features.ipynb`, section 3 "GBT regularised runs"); results in
+      `Progress_Report.md` §7.8 (train / validation gap closed, test F1 and PR-AUC level with the first
+      batch; the headline GBT from now on, the first batch stays as the unregularised reference)
 - [ ] **GIN recipe tuning** (decided 17 Oct, after the 13 Oct meeting) — the training recipe is tuned once
       per operator on config 2 and then frozen; GIN first, PNA / GATv2 / Transformer later with the same code
-      and notebook template. Rules and stage tracker in section 2b; `GIN_tuning.ipynb` (Kaggle, 3–5 sessions)
-      → `Outputs/TUNING/GIN/recipe.json`; then `GIN_tuning_final.ipynb` retrains on train + val with 4 seeds
-      (section 3b); results → `Progress_Report.md` §7.8–7.9
+      and notebook template. Rules and stage tracker in section 2b. **Tuning done (two Kaggle sessions, 17–19
+      Oct): `Outputs/TUNING/GIN/recipe.json` frozen = v1 + BatchNorm after each MP layer, best epoch 34.**
+      Next: `GIN_tuning_final.ipynb` retrains on train + val with 4 seeds (section 3b); results →
+      `Progress_Report.md` §7.9–7.10
 
 ---
 
@@ -151,12 +153,13 @@ incumbent is the v1 recipe (dropout 0.3, no norm, 2 layers, no FFN, pos_weight 8
 - [x] Stage 3 · FFN {off, on} → `Outputs/TUNING/GIN/s3_ffn/` — incumbent FFN off kept
 - [x] Stage 4 · pos_weight {8, 16} → `Outputs/TUNING/GIN/s4_pos_weight/` — incumbent 8 kept (edge trial 4
       ran, no win)
-- [ ] Stage 5 · LR {5e-4, 1e-3, 3e-3} → `Outputs/TUNING/GIN/s5_lr/` (session 1 was cut inside the 5e-4 trial;
-      it is redone from scratch next session)
-- [ ] Stage 6 · dropout {0.2, 0.3, 0.4} → `Outputs/TUNING/GIN/s6_dropout/`
-- [ ] Edge-rule trials (only if triggered): stage 2 → `s2_layers/bn_l3/` (done), stage 4 →
-      `s4_pos_weight/bn_pw4/` (done); stages 5–6 pending
-- [ ] Freeze → `Outputs/TUNING/GIN/recipe.json`, `trials_summary.csv`, `tuning_curves.png`
+- [x] Stage 5 · LR {5e-4, 1e-3, 3e-3} → `Outputs/TUNING/GIN/s5_lr/` — incumbent 1e-3 kept (the 5e-4 trial cut
+      in session 1 was redone from scratch in session 2)
+- [x] Stage 6 · dropout {0.2, 0.3, 0.4} → `Outputs/TUNING/GIN/s6_dropout/` — incumbent 0.3 kept
+- [x] Edge-rule trials: stage 2 → `s2_layers/bn_l3/`, stage 4 → `s4_pos_weight/bn_pw4/`; not triggered in
+      stages 5–6 (the incumbent sat in the middle of both grids)
+- [x] Freeze (19 Oct) → `Outputs/TUNING/GIN/recipe.json` (= v1 + BatchNorm, best epoch 34, thresholds per
+      retrain seed), `trials_summary.csv`, `tuning_curves.png`
 
 ---
 
@@ -289,11 +292,11 @@ are ranked by **validation PR-AUC** (threshold-free) instead of F1. Same halving
 the search log in `Outputs/GBT_REG/search/`, the summaries in `batch_summary_gbt_reg.csv` and
 `seed_summary_gbt_reg.csv`.*
 
-- [ ] **GBT-reg search** · LightGBM, successive halving with early stopping, ranked by validation PR-AUC → `Outputs/GBT_REG/search/best_params.json` + `trials.csv`
-- [ ] **GBT-reg-42** · all 93 features · seed 42 → `Outputs/GBT_REG/lightgbm_readout-full_seed-42_gbt-reg/` — the run compared with the single-seed GNN runs
-- [ ] **GBT-reg-43** · all 93 features · seed 43 → `Outputs/GBT_REG/lightgbm_readout-full_seed-43_gbt-reg/`
-- [ ] **GBT-reg-44** · all 93 features · seed 44 → `Outputs/GBT_REG/lightgbm_readout-full_seed-44_gbt-reg/`
-- [ ] **GBT-reg-45** · all 93 features · seed 45 → `Outputs/GBT_REG/lightgbm_readout-full_seed-45_gbt-reg/`
+- [x] **GBT-reg search** · LightGBM, successive halving with early stopping, ranked by validation PR-AUC → `Outputs/GBT_REG/search/best_params.json` + `trials.csv`
+- [x] **GBT-reg-42** · all 93 features · seed 42 → `Outputs/GBT_REG/lightgbm_readout-full_seed-42_gbt-reg/` — the run compared with the single-seed GNN runs
+- [x] **GBT-reg-43** · all 93 features · seed 43 → `Outputs/GBT_REG/lightgbm_readout-full_seed-43_gbt-reg/`
+- [x] **GBT-reg-44** · all 93 features · seed 44 → `Outputs/GBT_REG/lightgbm_readout-full_seed-44_gbt-reg/`
+- [x] **GBT-reg-45** · all 93 features · seed 45 → `Outputs/GBT_REG/lightgbm_readout-full_seed-45_gbt-reg/`
 
 **Decision rule, fixed in advance:** the regularised batch is the headline GBT in the comparison with
 the GNNs (the model whose train curve is informative); the first batch stays reported as the
@@ -347,15 +350,26 @@ how much the frozen threshold matters. The GIN feature configs under the frozen 
 
 *Newest first. Unticked = in progress · ticked = finished and synced.*
 
-- [ ] **17–18 Oct** — GIN tuning session 1 (one 12 h Kaggle session): probe + stages 1–4 finished, stage 5
-      cut by the session limit (its unfinished trial is redone next session); results in
+- [ ] **18–19 Oct** — GIN tuning session 2 (Kaggle, 5.4 h): probe re-run with the same verdict, stages 1–4
+      skipped from the committed `trial.json` files, stage 5 (2.6 h) and stage 6 (2.7 h) run, no edge trial
+      triggered, recipe frozen → `Outputs/TUNING/GIN/recipe.json` = v1 + BatchNorm (2 layers, no FFN,
+      pos_weight 8, LR 1e-3, dropout 0.3), best epoch 34, val F1 0.609 ± 0.019 over the two seeds; every
+      challenger of stages 2–6 landed 0.01–0.05 below the incumbent, none passed the winner margin; decisions
+      re-checked locally with `choose_winner`; GIN tuning total ≈ 17.4 GPU hours. `GIN_tuning.ipynb` is now
+      committed without outputs (GitHub's 1 MB limit blocked the Kaggle import; CLAUDE.md §7). Next:
+      `GIN_tuning_final.ipynb` (4 seeds, ~2 h); Notion synced
+- [x] **17–18 Oct** — GIN tuning session 1 (one 12 h Kaggle session): probe + stages 1–4 finished, stage 5
+      cut by the session limit (its unfinished trial was redone in session 2); results in
       `Outputs/TUNING/GIN/`, decisions re-checked against the rule; incumbent after stage 4 = BatchNorm,
       2 layers, no FFN, pos_weight 8; Notion synced
 - [ ] **17 Oct** — recipe tuning planned (after the 13 Oct meeting with Aris and Loris): one pass per
       operator on config 2, GIN first; rules, stages and tracker in section 2b, final-retrain rows in
       section 3b, train + val graph and `recipe.json` schema in the appendix; `gnn_core.py` changes and
       `GIN_tuning.ipynb` / `GIN_tuning_final.ipynb` to follow; Notion experiments page synced
-- [ ] **18 Oct** — GBT regularised batch planned: `GBT_VARIANT` knob in `gbt_core.py` (v1 reproduced
+- [x] **18 Oct** — GBT regularised batch run: search (193 fits, 1.35 h, winner 25 leaves, learning rate 0.010,
+      stopped at round 1,380) and the four seeds (27–54 min each) locally; results, curves and predictions in
+      `Outputs/GBT_REG/`, tables and verdict in `Progress_Report.md` §7.8 (§5.5 / §7.7 / §8 adjusted); Notion synced
+- [x] **18 Oct** — GBT regularised batch planned: `GBT_VARIANT` knob in `gbt_core.py` (v1 reproduced
       unchanged; `reg` = smaller search space, early stopping on the weighted validation loss with
       patience 100, trials ranked by validation PR-AUC); `GBT_reg_fixed_features.ipynb`; block "GBT
       regularised runs" in section 3; Notion synced
