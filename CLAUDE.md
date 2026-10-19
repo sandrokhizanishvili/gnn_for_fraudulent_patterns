@@ -76,7 +76,7 @@ Fixed **a priori for ALL runs** (chosen so the 81-dim feature set is never compr
 | Hidden dim | **128** |
 | Dropout | 0.3 |
 | Node MLP (GIN family) | Linear → BatchNorm → ReLU → Linear, learnable ε, residual |
-| GATv2 | 4 heads × 32 = 128 |
+| GATv2 | 4 heads × 32 = 128; `add_self_loops=True` in v1 (recipe knob `self_loops`, tuned for GATv2 only) |
 | PNA | PyG `PNAConv`, aggregators mean/max/min/std × scalers identity/amplification/attenuation, towers 1, in-degree histogram of the training graph; same dims/depth |
 | Transformer | PyG `TransformerConv` with edge features, 4 heads × 32 = 128, same 2-layer template (local attention over sampled neighbours — full-graph attention is infeasible at 5M edges) |
 | Readout | concat `[h_src ‖ h_dst ‖ e_seed]` → Linear 128 → ReLU → Dropout → Linear 1 |

@@ -65,7 +65,8 @@ DISPLAY_COLS = ['run', 'best_epoch', 'threshold', 'val_f1', 'test_f1', 'test_pre
 # ---------------- recipe tuning (EXPERIMENTS.md section 2b) ----------------
 NORMS = ('none', 'batch', 'layer')            # normalisation after each message-passing layer
 RECIPE_KNOBS = ('hidden', 'num_layers', 'dropout', 'norm', 'ffn', 'num_neighbors', 'batch_size',
-                'epochs', 'lr', 'weight_decay', 'pos_weight')
+                'epochs', 'lr', 'weight_decay', 'pos_weight', 'self_loops')
+# self_loops: GATv2's add_self_loops (node i also attends to itself); the other operators ignore it
 # neighbours per hop by depth: hops 1-2 are always [100, 100], deeper models only add hops
 NEIGHBOURS_BY_DEPTH = {2: [100, 100], 3: [100, 100, 50], 4: [100, 100, 50, 50],
                        6: [100, 100, 50, 50, 25, 25], 8: [100, 100, 50, 50, 25, 25, 25, 25]}
@@ -89,7 +90,7 @@ def default_recipe():
     '''The v1 recipe from the module constants (read at call time, so a scratch patch of a constant still applies).'''
     return dict(hidden=HIDDEN, num_layers=NUM_LAYERS, dropout=DROPOUT, norm='none', ffn=False,
                 num_neighbors=list(NUM_NEIGHBORS), batch_size=BATCH_SIZE, epochs=EPOCHS,
-                lr=LR, weight_decay=WEIGHT_DECAY, pos_weight=POS_WEIGHT)
+                lr=LR, weight_decay=WEIGHT_DECAY, pos_weight=POS_WEIGHT, self_loops=True)
 
 
 def full_recipe(recipe=None):
@@ -103,6 +104,7 @@ def full_recipe(recipe=None):
     assert out['hidden'] % HEADS == 0, 'hidden must split into the attention heads'
     assert len(out['num_neighbors']) == out['num_layers'], 'one neighbour count per message-passing layer'
     assert out['num_layers'] >= 1 and out['epochs'] >= 1
+    assert isinstance(out['self_loops'], bool), 'self_loops is a flag'
     return out
 
 
@@ -113,13 +115,15 @@ def recipe_tag(recipe, base=None):
              'batch_size': 'bs', 'epochs': 'ep'}
     parts = []
     for knob in ('dropout', 'norm', 'num_layers', 'num_neighbors', 'hidden', 'pos_weight', 'lr', 'ffn',
-                 'weight_decay', 'batch_size', 'epochs'):
+                 'self_loops', 'weight_decay', 'batch_size', 'epochs'):
         if full[knob] == ref[knob]:
             continue
         if knob == 'norm':
             parts.append({'batch': 'bn', 'layer': 'ln', 'none': 'nonorm'}[full['norm']])
         elif knob == 'ffn':
             parts.append('ffn' if full['ffn'] else 'noffn')
+        elif knob == 'self_loops':
+            parts.append('sl' if full['self_loops'] else 'nosl')
         elif knob == 'num_layers':
             parts.append(f"l{full['num_layers']}")
         elif knob == 'num_neighbors':
@@ -311,10 +315,11 @@ def gin_mlp(hidden):
                          nn.Linear(hidden, hidden))
 
 
-def make_conv(operator, hidden, mp_edge_dim, deg_hist=None):
+def make_conv(operator, hidden, mp_edge_dim, deg_hist=None, self_loops=True):
     '''One graph convolution for the operator; the only place operators differ.
 
     mp_edge_dim = 0 -> edge features stay out of message passing.
+    self_loops: GATv2's add_self_loops (recipe knob; v1 = True); the other operators ignore it.
     transformer: root_weight (the node's own state through lin_skip) is part of the standard operator.
     '''
     if operator == 'gin':
@@ -331,13 +336,13 @@ def make_conv(operator, hidden, mp_edge_dim, deg_hist=None):
         return PNAConv(hidden, hidden, **pna_kwargs)
     if operator == 'gat':
         # HEADS heads concatenated -> hidden; lin_edge (edge_dim) is the only width-dependent tensor.
-        # add_self_loops: node i also attends to itself; fill_value: its self-loop gets the mean of
-        # i's incoming edge features. Both are PyG's defaults, written out to be visible.
+        # add_self_loops (recipe knob self_loops, v1 = True): node i also attends to itself; fill_value: its
+        # self-loop gets the mean of i's incoming edge features. PyG's defaults, written out to be visible.
         if mp_edge_dim > 0:
             return GATv2Conv(hidden, hidden // HEADS, heads=HEADS, edge_dim=mp_edge_dim,
-                             add_self_loops=True, fill_value='mean', bias=True)
+                             add_self_loops=self_loops, fill_value='mean', bias=True)
         return GATv2Conv(hidden, hidden // HEADS, heads=HEADS,
-                         add_self_loops=True, fill_value='mean', bias=True)
+                         add_self_loops=self_loops, fill_value='mean', bias=True)
     if operator == 'transformer':
         # HEADS heads concatenated -> hidden; lin_edge (edge_dim) is the only width-dependent tensor.
         # beta, dropout and root_weight are PyG's defaults, written out to be visible.
@@ -370,13 +375,14 @@ class MPLayer(nn.Module):
     that choice is 'none' (the FFN block always ends in a normalisation). Neither registers parameters when off.
     '''
 
-    def __init__(self, operator, hidden, mp_edge_dim, bidirectional, dropout, deg_hist=None, norm='none', ffn=False):
+    def __init__(self, operator, hidden, mp_edge_dim, bidirectional, dropout, deg_hist=None, norm='none', ffn=False,
+                 self_loops=True):
         super().__init__()
         self.use_edges = mp_edge_dim > 0
         self.bidirectional = bidirectional
-        self.conv_in = make_conv(operator, hidden, mp_edge_dim, deg_hist)
+        self.conv_in = make_conv(operator, hidden, mp_edge_dim, deg_hist, self_loops)
         if bidirectional:
-            self.conv_out = make_conv(operator, hidden, mp_edge_dim, deg_hist)
+            self.conv_out = make_conv(operator, hidden, mp_edge_dim, deg_hist, self_loops)
             self.merge = nn.Linear(2 * hidden, hidden)
         self.dropout = nn.Dropout(dropout)
         self.norm = make_norm(norm, hidden)
@@ -421,7 +427,8 @@ class EdgeClassifier(nn.Module):
         hidden = r['hidden']
         self.node_proj = nn.Linear(node_dim, hidden)
         self.layers = nn.ModuleList(
-            [MPLayer(operator, hidden, mp_edge_dim, bidirectional, r['dropout'], deg_hist, r['norm'], r['ffn'])
+            [MPLayer(operator, hidden, mp_edge_dim, bidirectional, r['dropout'], deg_hist, r['norm'], r['ffn'],
+                     r['self_loops'])
              for _ in range(r['num_layers'])])
         self.classifier = nn.Sequential(
             nn.Linear(2 * hidden + readout_edge_dim, hidden), nn.ReLU(), nn.Dropout(r['dropout']),
@@ -1146,7 +1153,8 @@ def trials_table(trials, winners=None):
             'stage': t['stage'], 'trial': t['trial'], 'winner': winners.get(t['stage']) == t['trial'],
             'dropout': r['dropout'], 'norm': r['norm'], 'num_layers': r['num_layers'],
             'num_neighbors': '-'.join(str(n) for n in r['num_neighbors']), 'hidden': r['hidden'],
-            'pos_weight': r['pos_weight'], 'lr': r['lr'], 'ffn': r['ffn'], 'epochs_T_max': r['epochs'],
+            'pos_weight': r['pos_weight'], 'lr': r['lr'], 'ffn': r['ffn'], 'self_loops': r.get('self_loops', True),
+            'epochs_T_max': r['epochs'],
             'best_epoch': t['best_epoch'],
             'epochs_run': '/'.join(str(t['epochs_run'][str(s)]) for s in t['seeds']),
             'reached_max': t['reached_max'],

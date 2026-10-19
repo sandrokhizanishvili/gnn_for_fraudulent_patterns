@@ -46,6 +46,12 @@ Mirrored on the Notion experiments page (kept in sync).
       Oct): `Outputs/TUNING/GIN/recipe.json` frozen = v1 + BatchNorm after each MP layer, best epoch 34.**
       Next: `GIN_tuning_final.ipynb` retrains on train + val with 4 seeds (section 3b); results →
       `Progress_Report.md` §7.9–7.10
+- [ ] **GATv2 recipe tuning** (started 19 Oct on the second Kaggle account, in parallel with the GIN retrain) — the same
+      pre-registered protocol on GAT config 2 (`GAT_tuning.ipynb` → `Outputs/TUNING/GAT/recipe.json`, tracker in
+      section 2b), then `GAT_tuning_final.ipynb` on configs 2 / 4 / 5 / 6 × 4 seeds (section 3b); heads stay 4 × 32;
+      the outer residual is the only residual in the GATv2 layer (PyG's `residual` option stays off, as in v1); one
+      extra stage, self-loops {on, off} (`add_self_loops`), sits between FFN and pos_weight; one seed per trial
+      (budget), noted as the one protocol difference from GIN
 
 ---
 
@@ -160,6 +166,19 @@ incumbent is the v1 recipe (dropout 0.3, no norm, 2 layers, no FFN, pos_weight 8
       stages 5–6 (the incumbent sat in the middle of both grids)
 - [x] Freeze (19 Oct) → `Outputs/TUNING/GIN/recipe.json` (= v1 + BatchNorm, best epoch 34, thresholds per
       retrain seed), `trials_summary.csv`, `tuning_curves.png`
+
+**GATv2 stage tracker** (`GAT_tuning.ipynb`, second Kaggle account; pointer = `Outputs/TUNING/GAT/<stage>/`, same rules and grids plus one operator-specific stage, heads fixed at 4 × 32; **one tuning seed (42) per trial** instead of two — a budget decision taken on 19 Oct, so the seed std is 0 and the winner margin is the fixed 0.01, the best epoch comes from the single smoothed validation curve, and the frozen threshold is that seed's; the final retrain keeps four seeds):
+
+- [ ] Probe — depths 2 / 4 / 6 at BatchNorm + FFN → `Outputs/TUNING/GAT/probe.json`
+- [ ] Stage 1 · norm {none, BatchNorm, LayerNorm} → `Outputs/TUNING/GAT/s1_norm/`
+- [ ] Stage 2 · layers {2, 4, 6} → `Outputs/TUNING/GAT/s2_layers/`
+- [ ] Stage 3 · FFN {off, on} → `Outputs/TUNING/GAT/s3_ffn/`
+- [ ] Stage 4 · self-loops {on, off} (GATv2's `add_self_loops`, v1 = on; the node's attention to itself is a weighted message inside the operator, not a residual) → `Outputs/TUNING/GAT/s4_self_loops/`
+- [ ] Stage 5 · pos_weight {8, 16} → `Outputs/TUNING/GAT/s5_pos_weight/`
+- [ ] Stage 6 · LR {5e-4, 1e-3, 3e-3} → `Outputs/TUNING/GAT/s6_lr/`
+- [ ] Stage 7 · dropout {0.2, 0.3, 0.4} → `Outputs/TUNING/GAT/s7_dropout/`
+- [ ] Edge-rule trials (only if triggered)
+- [ ] Freeze → `Outputs/TUNING/GAT/recipe.json`, `trials_summary.csv`, `tuning_curves.png`
 
 ---
 
@@ -331,6 +350,16 @@ v1 convention; the seed is a sub-folder.*
 to the v1 runs of the same configs (single seed, 20 epochs) with the protocol difference stated; the sensitivity table shows
 how much the frozen threshold matters. Configs 4, 5 and 6 reuse the epoch and the threshold tuned on config 2, so their
 numbers carry that transfer as a stated caveat; configs 1, 3 and 7 (no edge features in message passing) are not rerun.
+
+### GATv2 final retrain (`GAT_tuning_final.ipynb`, configs 2 / 4 / 5 / 6 × seeds 42–45, after `Outputs/TUNING/GAT/recipe.json` exists)
+
+- [ ] **GAT-2 v2** · base / base · frozen GATv2 recipe, 4 seeds → `Outputs/FINAL/GAT/retrain/gat_mp-base_readout-base_dir-in/seed-<s>/`
+- [ ] **GAT-4 v2** · base+GFP / base+GFP · 4 seeds → `Outputs/FINAL/GAT/retrain/gat_mp-full_readout-full_dir-in/seed-<s>/`
+- [ ] **GAT-5 v2** · base / base+GFP · 4 seeds → `Outputs/FINAL/GAT/retrain/gat_mp-base_readout-full_dir-in/seed-<s>/`
+- [ ] **GAT-6 v2** · base / GFP only · 4 seeds → `Outputs/FINAL/GAT/retrain/gat_mp-base_readout-gfp_dir-in/seed-<s>/`
+- [ ] Summaries → `Outputs/FINAL/GAT/retrain/batch_summary_retrain.csv`, `seed_summary_retrain.csv`; per-run `sensitivity.csv`
+
+Same decision rule as for GIN: nothing is chosen here; configs 4, 5 and 6 reuse the epoch and the threshold tuned on GAT config 2.
 
 ---
 
@@ -520,7 +549,7 @@ name suffix `_gbt-reg`; outputs under `Outputs/GBT_REG/`.
   `eval_mask` all true. Asserted: the first 3,046,342 edges of the val snapshot equal the train snapshot,
   3,379 laundering edges, 4,061,789 seeds (496 batches per epoch). RWPE, when used, comes from the val
   snapshot file. The PNA degree histogram would come from this graph (the graph trained on).
-- *`recipe.json`.* `operator`, `cfg`, `recipe` (all knobs incl. `num_neighbors`, `epochs` = T_max),
+- *`recipe.json`.* `operator`, `cfg`, `recipe` (all knobs incl. `num_neighbors`, `epochs` = T_max, `self_loops` = GATv2's `add_self_loops`, ignored by the other operators),
   `best_epoch`, `thresholds` (one value for every retrain seed = the mean of the tuning seeds' thresholds), `tuning_thresholds`, `threshold_source`, `val_f1_mean`,
   `val_f1_std`, `stopped_epochs`, `source_stage`. Loaded and re-validated by the final notebook, which stops
   with a clear message if the file is missing.
