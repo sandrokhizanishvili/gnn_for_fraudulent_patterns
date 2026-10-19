@@ -136,7 +136,7 @@ incumbent is the v1 recipe (dropout 0.3, no norm, 2 layers, no FFN, pos_weight 8
 | Train vs validation at the best epoch | each (trial, seed) keeps a temporary checkpoint per epoch; both seeds run back to back; after the second seed the checkpoints at the seed-mean best epoch are scored on train and validation (that seed's threshold) → `trial.json`, then the checkpoints are deleted. A trial counts as done only once this is written; a session that stops between the two seeds re-runs the first |
 | Train metrics during training | train split scored every 5th epoch and at the last one; validation every epoch |
 | Summary tables | `stage_summary.csv` / `trials_summary.csv`: one row per trial with every hyperparameter, best epoch, stopped epoch per seed, train and validation F1 / PR-AUC (mean ± std), the train − validation gap, winner flag. Caveat next to the gap: validation has 0.107 % laundering vs 0.075 % on train, so part of the gap is prevalence, not underfitting |
-| Freeze | `Outputs/TUNING/GIN/recipe.json` — knobs, neighbour lists, T_max, best epoch, thresholds for all four retrain seeds (42 and 43 their own at the best epoch; 44 and 45 the mean of the two), validation F1 mean ± std, source stage. The single source of the frozen numbers; no copy in code |
+| Freeze | `Outputs/TUNING/GIN/recipe.json` — knobs, neighbour lists, T_max, best epoch, one threshold for all four retrain seeds (the mean of the two tuning seeds' validation thresholds at the best epoch; the per-seed tuning values are kept in `tuning_thresholds`; decided 19 Oct), validation F1 mean ± std, source stage. The single source of the frozen numbers; no copy in code |
 | Final retrain | `GIN_tuning_final.ipynb`: train + val graph (built in memory, appendix), T_max = 100 unchanged, stop at the frozen best epoch, frozen per-seed threshold, seeds 42–45, test scored once per seed; reported: test metrics as mean ± std over the four seeds (F1, PR-AUC), threshold sensitivity (frozen −0.10 … +0.10 and 0.5), train / val metrics with val marked as seen in training. Secondary view, stored next to it and never the headline (decided 19 Oct): per seed the threshold re-swept on the validation rows (trained on in this phase) and the thresholded metrics at it (`val_seen_threshold`, `seen_<split>_<f1|precision|recall>`, one extra row in `sensitivity.csv`), so the drift of a seen-data sweep is visible; PR-AUC, ROC-AUC and the top-5 % metrics are threshold-free, unaffected, and read first |
 | Known limitation | the train + val graph has 496 batches per epoch vs 372 in tuning, so stopping at the frozen epoch means ~33 % more update steps with the same per-epoch LR profile; reported, not corrected |
 | Not refit | GFP scalers and the bank target encoding stay fit on the train window (a consistent refit would change the val rows' features between phases) |
@@ -323,8 +323,8 @@ v1 convention; the seed is a sub-folder.*
 
 - [ ] **GIN-2 v2 · seed 42** · base / base · frozen recipe → `Outputs/FINAL/GIN/retrain/gin_mp-base_readout-base_dir-in/seed-42/`
 - [ ] **GIN-2 v2 · seed 43** → `Outputs/FINAL/GIN/retrain/gin_mp-base_readout-base_dir-in/seed-43/`
-- [ ] **GIN-2 v2 · seed 44** (threshold = mean of seeds 42 and 43) → `Outputs/FINAL/GIN/retrain/gin_mp-base_readout-base_dir-in/seed-44/`
-- [ ] **GIN-2 v2 · seed 45** (threshold = mean of seeds 42 and 43) → `Outputs/FINAL/GIN/retrain/gin_mp-base_readout-base_dir-in/seed-45/`
+- [ ] **GIN-2 v2 · seed 44** → `Outputs/FINAL/GIN/retrain/gin_mp-base_readout-base_dir-in/seed-44/`
+- [ ] **GIN-2 v2 · seed 45** → `Outputs/FINAL/GIN/retrain/gin_mp-base_readout-base_dir-in/seed-45/`
 - [ ] Summaries → `Outputs/FINAL/GIN/retrain/batch_summary_retrain.csv`, `seed_summary_retrain.csv` (mean ± std over the four seeds); per-seed `sensitivity.csv`
 
 **Decision rule, fixed in advance:** nothing is chosen here. Test F1 mean ± std and PR-AUC over the four seeds are reported next
@@ -520,7 +520,7 @@ name suffix `_gbt-reg`; outputs under `Outputs/GBT_REG/`.
   3,379 laundering edges, 4,061,789 seeds (496 batches per epoch). RWPE, when used, comes from the val
   snapshot file. The PNA degree histogram would come from this graph (the graph trained on).
 - *`recipe.json`.* `operator`, `cfg`, `recipe` (all knobs incl. `num_neighbors`, `epochs` = T_max),
-  `best_epoch`, `thresholds` {42, 43: own; 44, 45: mean of the two}, `threshold_source`, `val_f1_mean`,
+  `best_epoch`, `thresholds` (one value for every retrain seed = the mean of the tuning seeds' thresholds), `tuning_thresholds`, `threshold_source`, `val_f1_mean`,
   `val_f1_std`, `stopped_epochs`, `source_stage`. Loaded and re-validated by the final notebook, which stops
   with a clear message if the file is missing.
 - *Final-retrain outputs.* `Outputs/FINAL/GIN/retrain/<run>/seed-<s>/`: `results.json` (plus `phase`,

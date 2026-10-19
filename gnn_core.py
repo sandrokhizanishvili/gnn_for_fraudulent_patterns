@@ -1315,17 +1315,17 @@ def neighbours_from_probe(probe, table=None):
 def save_recipe(path, operator, cfg, trial, retrain_seeds=(42, 43, 44, 45)):
     '''recipe.json: the frozen knobs, best epoch, per-seed thresholds and the validation F1 that chose them.
 
-    Tuning seeds keep their own threshold at the best epoch; the retrain seeds that were not tuned
-    (44, 45) get the mean of the tuning seeds' thresholds.
+    One threshold for every retrain seed: the mean of the tuning seeds' validation thresholds at the best epoch
+    (the per-seed tuning thresholds are kept in 'tuning_thresholds' for the record).
     '''
     tuned = {str(s): float(trial['thresholds'][str(s)]) for s in trial['seeds']}
     mean_threshold = float(np.mean(list(tuned.values())))
-    thresholds = {str(s): tuned.get(str(s), mean_threshold) for s in retrain_seeds}
+    thresholds = {str(s): mean_threshold for s in retrain_seeds}
     frozen = {'operator': operator, 'cfg': cfg, 'recipe': full_recipe(trial['recipe']),
               'best_epoch': int(trial['best_epoch']), 'tuning_seeds': list(trial['seeds']),
-              'retrain_seeds': list(retrain_seeds), 'thresholds': thresholds,
-              'threshold_source': 'tuning seeds: own validation threshold at best_epoch; '
-                                  'other seeds: mean of the tuning seeds',
+              'retrain_seeds': list(retrain_seeds), 'thresholds': thresholds, 'tuning_thresholds': tuned,
+              'threshold_source': 'one threshold for every retrain seed: the mean of the tuning seeds\' '
+                                  'validation thresholds at best_epoch',
               'val_f1_mean': trial['val_f1_mean'], 'val_f1_std': trial['val_f1_std'],
               'train_f1_mean': trial['train_f1_mean'], 'epochs_run': trial['epochs_run'],
               'source_stage': trial['stage'], 'source_trial': trial['trial']}

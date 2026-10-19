@@ -32,12 +32,12 @@
     45
   ],
   "thresholds": {
-    "42": 0.6528624892234802,
-    "43": 0.6556033492088318,
+    "42": 0.654232919216156,
+    "43": 0.654232919216156,
     "44": 0.654232919216156,
     "45": 0.654232919216156
   },
-  "threshold_source": "tuning seeds: own validation threshold at best_epoch; other seeds: mean of the tuning seeds",
+  "threshold_source": "one threshold for every retrain seed: the mean of the tuning seeds' validation thresholds at best_epoch",
   "val_f1_mean": 0.6085806996100344,
   "val_f1_std": 0.018950428810741226,
   "train_f1_mean": 0.5896203383724182,
@@ -46,5 +46,9 @@
     "43": 44
   },
   "source_stage": "s6_dropout",
-  "source_trial": "bn"
+  "source_trial": "bn",
+  "tuning_thresholds": {
+    "42": 0.6528624892234802,
+    "43": 0.6556033492088318
+  }
 }
