@@ -264,7 +264,8 @@ scored boosting round (`epoch` = round); the result row keeps every `batch_summa
 `operator = lightgbm`, `mp = none`, `mp_direction = none`, `params` = trees kept,
 `invariant_params = 0`; `results.json` adds `hyperparams` and `paper_comparison` (F1 at 0.5).
 Search log: `Outputs/GBT/search/`; summaries `Outputs/GBT/batch_summary_gbt.csv` and
-`seed_summary_gbt.csv`.
+`seed_summary_gbt.csv`; `Outputs/GBT/tail_check.csv` = the side check of the notebook appendix (boosters scored
+on the test window including the removed tail days) — outside the protocol, never used to choose or compare.
 Recipe-tuning runs (`EXPERIMENTS.md` §2b): `Outputs/TUNING/<FAMILY>/s<k>_<knob>/<trial>/` holds `trial.json`
 (the trial's scoring: knobs, seed-mean best epoch, per-seed thresholds, train / val metrics mean ± std, the
 gap) and `seed-<s>/history.csv`, `curves.png`; per stage `stage_summary.csv`; per family
@@ -326,9 +327,9 @@ mirror both to their Notion pages. Mark superseded rows `SUPERSEDED`, never dele
   the Kaggle repo clone so committed trials are skipped on the next session. The final notebook loads
   `recipe.json` (and stops with a clear message if it is missing), builds the train + val graph in
   memory and runs `run_final` for configs 2, 4, 5 and 6 × seeds 42–45 (the epoch from the config-2 tuning; one validation-chosen
-  threshold per config — the tuned config keeps the frozen one, the mean of the two tuning seeds' validation thresholds,
-  the others get a selection run via `run_threshold_selection` → `Outputs/TUNING/<FAMILY>/config_thresholds.json`;
-  config 2's threshold is kept as the secondary `transfer_*` view; test metrics reported as mean ± std over the four; secondary view per seed: the threshold re-swept
+  threshold per config, every config by the same selection run via `run_threshold_selection` →
+  `Outputs/TUNING/<FAMILY>/config_thresholds.json`; the frozen tuning threshold of `recipe.json` is kept as the
+  secondary `transfer_*` view; test metrics reported as mean ± std over the four; secondary view per seed: the threshold re-swept
   on the seen val rows and the thresholded metrics at it, `val_seen_threshold` / `seen_<split>_<metric>`, never the
   headline — PR-AUC is threshold-free and read first). **This pair is committed without
   outputs** (decided 18 Oct 2026): its executed form is several MB of inline curve images and logs,

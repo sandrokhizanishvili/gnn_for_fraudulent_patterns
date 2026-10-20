@@ -358,6 +358,9 @@ Same decision rule as for GIN: nothing is chosen here; configs 4, 5 and 6 reuse 
 
 *Newest first. Unticked = in progress · ticked = finished and synced.*
 
+- [x] **20 Oct** — tail-window side check moved from a scratch script into the repo: appendix of
+      `GBT_fixed_features.ipynb` (clearly marked as outside the protocol) + `gbt_core.tail_check`, result
+      `Outputs/GBT/tail_check.csv`; same numbers as the 18–19 Oct scratch run (0.638 ± 0.005 on test + tail)
 - [x] **20 Oct** — GBT cleaned up to one batch and one notebook: the unregularised first batch (17–18 Oct)
       memorised the train rows and was removed from the repo; the regularised batch is now *the* GBT
       (`Outputs/GBT/`, run names `lightgbm_readout-full_seed-<s>`, summaries `*_gbt.csv`, result files
@@ -514,6 +517,14 @@ architecture-invariant block). Run name `lightgbm_readout-full_seed-<seed>`; `re
 `hyperparams` (with `early_stopping`) and `paper_comparison` (F1 at threshold 0.5 on train / val / test,
 the paper's decision rule). `best.txt` (the booster) and `predictions.csv` stay out of git. The first,
 unregularised batch and the `GBT_VARIANT` knob that labelled the two batches were removed on 20 Oct (log).
+*Side check, outside the protocol* (notebook appendix, `gbt_core.tail_check`, `build_tail_matrix`): the 1,108
+tail rows (Timestamp ≥ 11 Sep, 655 laundering) get their 93 features rebuilt from `Data/HI-Small_Trans.csv`
+— baseline recipe of `Data_preparation` (10 Sep FX rates carried forward, bank risk frozen at the train
+rate), GFP streamed causally in WSL with the V0 parameters from the batch boundary before 9 Sep, train-fit
+normalisation, entity one-hots; self-checked on the 10 Sep rows (baseline exact, GFP per column group
+within 1 %) — and the four `best.txt` boosters are scored at their validation thresholds and at 0.5 on four
+windows (our test = must reproduce `results.json`; our test + tail; the paper code's 9–18 Sep window; the
+tail alone) → `Outputs/GBT/tail_check.csv`. Nothing is chosen on these numbers; they size the window effect.
 
 **Recipe tuning** (section 2b; `gnn_core.py`, `GIN_tuning.ipynb`, `GIN_tuning_final.ipynb`):
 - *Recipe dict.* `DEFAULT_RECIPE` = the v1 constants (hidden 128, 2 layers, dropout 0.3, norm none, FFN off,
