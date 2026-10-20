@@ -162,22 +162,19 @@ them here. Rules that apply when implementing:
   run on validation F1 (gap < 0.02 = tie; test never used to choose). A win stays a separate
   finding; V0 remains the default sheet for every other experiment until I decide otherwise.
   Always comment on overfitting from the curves, especially config 4.
-- **GBT cross-check (decided 17 Oct):** LightGBM on the same 93 inputs (81 `edge_attr` columns +
-  the 6 + 6 entity one-hots of both endpoints), no message passing — hand-crafted graph features vs
-  learned ones. Hyperparameters are chosen **once** by successive halving (x0 = 100, η = 2,
-  r0 = 0.1; train rows only, scored on validation) and then frozen for the 4 seeds (42–45); nothing is
-  tuned per seed. Code in `gbt_core.py` (imports the metric / threshold / plot helpers from
-  `gnn_core.py`, never copies them); notebook `GBT_fixed_features.ipynb` runs **locally on CPU**
-  (`graph_feature_preprocessor` env + lightgbm), the one exception to the Kaggle loop of §7. The
-  search space and row conventions are in the `EXPERIMENTS.md` appendix. Only test F1 is a fair
-  score for these runs (validation picks hyperparameters, kept round and threshold); say so wherever
-  the GBT is compared.
-  **`GBT_VARIANT` (v1 | reg, decided 18 Oct):** the v1 batch memorises the train rows (train PR-AUC
-  1.00), so a second, separately labelled batch `reg` (`GBT_reg_fixed_features.ipynb`,
-  `Outputs/GBT_REG/`, run names end in `_gbt-reg`) uses a smaller search space, early stopping on
-  the weighted validation loss (patience 100; the kept round = the lowest-loss round, threshold swept
-  there) and ranks search trials by validation PR-AUC. `reg` is the headline GBT once done; v1 stays
-  as the unregularised reference. `gbt_core.VARIANTS` holds both; v1 code paths are unchanged.
+- **GBT cross-check (decided 17 Oct, recipe fixed 18 Oct):** LightGBM on the same 93 inputs (81
+  `edge_attr` columns + the 6 + 6 entity one-hots of both endpoints), no message passing — hand-crafted
+  graph features vs learned ones. Hyperparameters are chosen **once** by successive halving (x0 = 100,
+  η = 2, r0 = 0.1; train rows only, scored on validation, trials ranked by validation PR-AUC) and then
+  frozen for the 4 seeds (42–45); nothing is tuned per seed. Every fit stops on the weighted validation
+  loss (patience 100; the kept round = the lowest-loss round, threshold swept there). Code in
+  `gbt_core.py` (imports the metric / threshold / plot helpers from `gnn_core.py`, never copies them);
+  one notebook `GBT_fixed_features.ipynb` runs **locally on CPU** (`graph_feature_preprocessor` env +
+  lightgbm), the one exception to the Kaggle loop of §7. The search space and row conventions are in
+  the `EXPERIMENTS.md` appendix. Only test F1 is a fair score for these runs (validation picks
+  hyperparameters, kept round and threshold); say so wherever the GBT is compared. A first, wider
+  search without early stopping memorised the train rows and was removed on 20 Oct together with its
+  `GBT_VARIANT` knob; a new variant needs a new decision, not a knob.
 
 ## 4. Evaluation protocol — never deviate
 
@@ -328,8 +325,10 @@ mirror both to their Notion pages. Mark superseded rows `SUPERSEDED`, never dele
   loader, scores the train split every 5th epoch (`eval_train_every = 5`), and its `OUT_ROOT` sits inside
   the Kaggle repo clone so committed trials are skipped on the next session. The final notebook loads
   `recipe.json` (and stops with a clear message if it is missing), builds the train + val graph in
-  memory and runs `run_final` for configs 2, 4, 5 and 6 × seeds 42–45 (the epoch and the one frozen threshold — the mean of the two tuning seeds'
-  validation thresholds; test metrics reported as mean ± std over the four; secondary view per seed: the threshold re-swept
+  memory and runs `run_final` for configs 2, 4, 5 and 6 × seeds 42–45 (the epoch from the config-2 tuning; one validation-chosen
+  threshold per config — the tuned config keeps the frozen one, the mean of the two tuning seeds' validation thresholds,
+  the others get a selection run via `run_threshold_selection` → `Outputs/TUNING/<FAMILY>/config_thresholds.json`;
+  config 2's threshold is kept as the secondary `transfer_*` view; test metrics reported as mean ± std over the four; secondary view per seed: the threshold re-swept
   on the seen val rows and the thresholded metrics at it, `val_seen_threshold` / `seen_<split>_<metric>`, never the
   headline — PR-AUC is threshold-free and read first). **This pair is committed without
   outputs** (decided 18 Oct 2026): its executed form is several MB of inline curve images and logs,
