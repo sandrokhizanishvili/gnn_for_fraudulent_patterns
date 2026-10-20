@@ -1,0 +1,135 @@
+{
+  "run": "gin_mp-base_readout-gfp_dir-in",
+  "operator": "gin",
+  "mp": "base",
+  "readout": "gfp",
+  "mp_direction": "in",
+  "temporal_sampling": false,
+  "node_enc": "none",
+  "gfp_variant": "v0",
+  "seed": 42,
+  "best_epoch": 34,
+  "threshold": 0.654232919216156,
+  "params": 114179,
+  "invariant_params": 68099,
+  "train_f1": 0.5554619488907611,
+  "train_precision": 0.7824367088607594,
+  "train_recall": 0.4305616020896822,
+  "train_pr_auc": 0.5230443963497795,
+  "train_roc_auc": 0.9883930032226834,
+  "train_precision_at_5pct": 0.013596554576609462,
+  "train_recall_at_5pct": 0.9016107966913365,
+  "val_f1": 0.651685393258427,
+  "val_precision": 0.7738246505717916,
+  "val_recall": 0.5628465804066544,
+  "val_pr_auc": 0.6358209453906412,
+  "val_roc_auc": 0.9894745356338818,
+  "val_precision_at_5pct": 0.01938037933547358,
+  "val_recall_at_5pct": 0.9094269870609981,
+  "test_f1": 0.5247035573122529,
+  "test_precision": 0.6027241770715096,
+  "test_recall": 0.4645669291338583,
+  "test_pr_auc": 0.5026914147593109,
+  "test_roc_auc": 0.9778887933742114,
+  "test_precision_at_5pct": 0.019006164693833337,
+  "test_recall_at_5pct": 0.8442694663167104,
+  "phase": "retrain",
+  "trained_on": "train+val",
+  "stop_epoch": 34,
+  "frozen_threshold": 0.654232919216156,
+  "val_seen": true,
+  "val_seen_threshold": 0.7562921643257141,
+  "seen_train_f1": 0.5468251667149898,
+  "seen_train_precision": 0.8185763888888888,
+  "seen_train_recall": 0.4105354810622551,
+  "seen_val_f1": 0.6569994422755159,
+  "seen_val_precision": 0.8284106891701828,
+  "seen_val_recall": 0.544362292051756,
+  "seen_test_f1": 0.5365344467640919,
+  "seen_test_precision": 0.6649417852522639,
+  "seen_test_recall": 0.44969378827646544,
+  "architecture": {
+    "hidden": 128,
+    "layers": 2,
+    "dropout": 0.3,
+    "neighbors": [
+      100,
+      100
+    ]
+  },
+  "recipe": {
+    "hidden": 128,
+    "num_layers": 2,
+    "dropout": 0.3,
+    "norm": "batch",
+    "ffn": false,
+    "num_neighbors": [
+      100,
+      100
+    ],
+    "batch_size": 8192,
+    "epochs": 100,
+    "lr": 0.001,
+    "weight_decay": 1e-05,
+    "pos_weight": 8.0
+  },
+  "threshold_sensitivity": [
+    {
+      "point": "frozen",
+      "threshold": 0.554232919216156,
+      "delta": -0.1,
+      "f1": 0.5047923322683706,
+      "precision": 0.5276717557251909,
+      "recall": 0.48381452318460194
+    },
+    {
+      "point": "frozen",
+      "threshold": 0.604232919216156,
+      "delta": -0.05,
+      "f1": 0.519294902334445,
+      "precision": 0.5700836820083682,
+      "recall": 0.4768153980752406
+    },
+    {
+      "point": "frozen",
+      "threshold": 0.654232919216156,
+      "delta": 0.0,
+      "f1": 0.5247035573122529,
+      "precision": 0.6027241770715096,
+      "recall": 0.4645669291338583
+    },
+    {
+      "point": "frozen",
+      "threshold": 0.704232919216156,
+      "delta": 0.05,
+      "f1": 0.5330620549338759,
+      "precision": 0.6366950182260024,
+      "recall": 0.4584426946631671
+    },
+    {
+      "point": "frozen",
+      "threshold": 0.754232919216156,
+      "delta": 0.1,
+      "f1": 0.5359749739311783,
+      "precision": 0.6632258064516129,
+      "recall": 0.44969378827646544
+    },
+    {
+      "point": "paper 0.5",
+      "threshold": 0.5,
+      "delta": -0.154232919216156,
+      "f1": 0.4883920894239037,
+      "precision": 0.4801352493660186,
+      "recall": 0.4969378827646544
+    },
+    {
+      "point": "val seen sweep",
+      "threshold": 0.7562921643257141,
+      "delta": 0.1020592451095581,
+      "f1": 0.5365344467640919,
+      "precision": 0.6649417852522639,
+      "recall": 0.44969378827646544
+    }
+  ],
+  "threshold_source": "one threshold for every retrain seed: the mean of the tuning seeds' validation thresholds at best_epoch"
+}
