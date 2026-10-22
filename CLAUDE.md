@@ -64,6 +64,9 @@ cosine T_max 100, pos_weight 8, weight decay 1e-5 — trained for the frozen 34 
 parameter count under this recipe is **68,099** (67,587 + the two BatchNorm affines), identical across configs; the stages for
 layers, FFN, pos_weight, LR and dropout all kept the incumbent. Every GIN v2 run (`GIN_tuning_final.ipynb`,
 later the seven feature configs) loads that file; the finished v1 GIN runs stay as they are. PNA, GATv2
+**GATv2 is tuned and frozen (21 Oct): `Outputs/TUNING/GAT/recipe.json` = the v1 recipe unchanged** (no
+normalisation, 2 layers, no FFN, self-loops on, pos_weight 8, LR 1e-3, dropout 0.3 — every stage kept the v1 value,
+one seed per trial) **with best epoch 44** on the 100-epoch cosine; its invariant parameter count stays 67,585. PNA
 and the Transformer keep v1 until they are tuned the same way. In `gnn_core.py`, `recipe=None`
 reproduces v1 exactly; a tuned run passes the recipe dict loaded from `recipe.json` (the only copy of the
 frozen numbers). This note is extended per operator when its recipe is frozen.

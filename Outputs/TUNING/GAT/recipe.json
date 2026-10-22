@@ -1,0 +1,52 @@
+{
+  "operator": "gat",
+  "cfg": {
+    "mp": "base",
+    "readout": "base"
+  },
+  "recipe": {
+    "hidden": 128,
+    "num_layers": 2,
+    "dropout": 0.3,
+    "norm": "none",
+    "ffn": false,
+    "num_neighbors": [
+      100,
+      100
+    ],
+    "batch_size": 8192,
+    "epochs": 100,
+    "lr": 0.001,
+    "weight_decay": 1e-05,
+    "pos_weight": 8.0,
+    "self_loops": true
+  },
+  "best_epoch": 44,
+  "tuning_seeds": [
+    42
+  ],
+  "retrain_seeds": [
+    42,
+    43,
+    44,
+    45
+  ],
+  "thresholds": {
+    "42": 0.4832745492458343,
+    "43": 0.4832745492458343,
+    "44": 0.4832745492458343,
+    "45": 0.4832745492458343
+  },
+  "tuning_thresholds": {
+    "42": 0.4832745492458343
+  },
+  "threshold_source": "one threshold for every retrain seed: the mean of the tuning seeds' validation thresholds at best_epoch",
+  "val_f1_mean": 0.5488257107540173,
+  "val_f1_std": 0.0,
+  "train_f1_mean": 0.4856410256410256,
+  "epochs_run": {
+    "42": 54
+  },
+  "source_stage": "s7_dropout",
+  "source_trial": "base"
+}

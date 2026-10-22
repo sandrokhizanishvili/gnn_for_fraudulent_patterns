@@ -45,7 +45,9 @@ Mirrored on the Notion experiments page (kept in sync).
       `Progress_Report.md` §7.8–7.9
 - [ ] **GATv2 recipe tuning** (started 19 Oct on the second Kaggle account, in parallel with the GIN retrain) — the same
       pre-registered protocol on GAT config 2 (`GAT_tuning.ipynb` → `Outputs/TUNING/GAT/recipe.json`, tracker in
-      section 2b), then `GAT_tuning_final.ipynb` on configs 2 / 4 / 5 / 6 × 4 seeds (section 3b); heads stay 4 × 32;
+      section 2b). **Tuning done (two sessions, 19–21 Oct): no knob beat the v1 recipe, frozen = v1 unchanged with
+      best epoch 44 on the 100-epoch cosine** (results in `Progress_Report.md` §7.11). Next: `GAT_tuning_final.ipynb` on
+      configs 2 / 4 / 5 / 6 × 4 seeds (section 3b) → §7.12; heads stay 4 × 32;
       the outer residual is the only residual in the GATv2 layer (PyG's `residual` option stays off, as in v1); one
       extra stage, self-loops {on, off} (`add_self_loops`), sits between FFN and pos_weight; one seed per trial
       (budget), noted as the one protocol difference from GIN
@@ -140,10 +142,10 @@ incumbent is the v1 recipe (dropout 0.3, no norm, 2 layers, no FFN, pos_weight 8
 | Train metrics during training | train split scored every 5th epoch and at the last one; validation every epoch |
 | Summary tables | `stage_summary.csv` / `trials_summary.csv`: one row per trial with every hyperparameter, best epoch, stopped epoch per seed, train and validation F1 / PR-AUC (mean ± std), the train − validation gap, winner flag. Caveat next to the gap: validation has 0.107 % laundering vs 0.075 % on train, so part of the gap is prevalence, not underfitting |
 | Freeze | `Outputs/TUNING/GIN/recipe.json` — knobs, neighbour lists, T_max, best epoch, one threshold for all four retrain seeds (the mean of the two tuning seeds' validation thresholds at the best epoch; the per-seed tuning values are kept in `tuning_thresholds`; decided 19 Oct), validation F1 mean ± std, source stage. The single source of the frozen numbers; no copy in code |
-| Final retrain | `GIN_tuning_final.ipynb`: train + val graph (built in memory, appendix), T_max = 100 unchanged, stop at the frozen best epoch, frozen per-seed threshold, seeds 42–45, test scored once per seed; reported: test metrics as mean ± std over the four seeds (F1, PR-AUC), threshold sensitivity (frozen −0.10 … +0.10 and 0.5), train / val metrics with val marked as seen in training. Secondary view, stored next to it and never the headline (decided 19 Oct): per seed the threshold re-swept on the validation rows (trained on in this phase) and the thresholded metrics at it (`val_seen_threshold`, `seen_<split>_<f1|precision|recall>`, one extra row in `sensitivity.csv`), so the drift of a seen-data sweep is visible; PR-AUC, ROC-AUC and the top-5 % metrics are threshold-free, unaffected, and read first |
+| Final retrain | `GIN_tuning_final.ipynb`: train + val graph (built in memory, appendix), T_max = 100 unchanged, stop at the frozen best epoch, **one validation-chosen threshold per config** (decided 20 Oct: every config, the tuned one included, gets one selection run — train graph only, frozen recipe, frozen number of epochs, seed 42 — and takes the validation-F1 threshold at the last epoch → `Outputs/TUNING/<FAMILY>/config_thresholds.json`; the test F1 at the frozen tuning threshold of `recipe.json` is kept as a secondary `transfer_*` view, because a cut chosen for one config's score scale penalises configs whose scores sit higher or lower, which the GIN retrain showed for config 4), seeds 42–45, test scored once per seed; reported: test metrics as mean ± std over the four seeds (F1, PR-AUC), threshold sensitivity (frozen −0.10 … +0.10 and 0.5), train / val metrics with val marked as seen in training. Secondary view, stored next to it and never the headline (decided 19 Oct): per seed the threshold re-swept on the validation rows (trained on in this phase) and the thresholded metrics at it (`val_seen_threshold`, `seen_<split>_<f1|precision|recall>`, one extra row in `sensitivity.csv`), so the drift of a seen-data sweep is visible; PR-AUC, ROC-AUC and the top-5 % metrics are threshold-free, unaffected, and read first |
 | Known limitation | the train + val graph has 496 batches per epoch vs 372 in tuning, so stopping at the frozen epoch means ~33 % more update steps with the same per-epoch LR profile; reported, not corrected |
 | Not refit | GFP scalers and the bank target encoding stay fit on the train window (a consistent refit would change the val rows' features between phases) |
-| Afterwards | the GIN feature configs with edge features in message passing — 2 (base / base), 4 (base+GFP / base+GFP), 5 (base / base+GFP), 6 (base / GFP only) — are retrained in `GIN_tuning_final.ipynb` exactly like config 2: train + val graph, the frozen epoch and the frozen threshold transferred unchanged from the config-2 tuning, 4 seeds 42–45 (mean ± std); configs 1, 3 and 7 (`mp = none`) are not rerun; PNA, GATv2 and the Transformer are tuned the same way, each in its own session block |
+| Afterwards | the GIN feature configs with edge features in message passing — 2 (base / base), 4 (base+GFP / base+GFP), 5 (base / base+GFP), 6 (base / GFP only) — are retrained in `GIN_tuning_final.ipynb` exactly like config 2: train + val graph, the frozen epoch transferred unchanged from the config-2 tuning, the threshold chosen per config on validation (selection run, see the Final retrain row), 4 seeds 42–45 (mean ± std); configs 1, 3 and 7 (`mp = none`) are not rerun; PNA, GATv2 and the Transformer are tuned the same way, each in its own session block |
 
 **GIN stage tracker** (pointer = `Outputs/TUNING/GIN/<stage>/`, no numbers here):
 
@@ -166,16 +168,16 @@ incumbent is the v1 recipe (dropout 0.3, no norm, 2 layers, no FFN, pos_weight 8
 
 **GATv2 stage tracker** (`GAT_tuning.ipynb`, second Kaggle account; pointer = `Outputs/TUNING/GAT/<stage>/`, same rules and grids plus one operator-specific stage, heads fixed at 4 × 32; **one tuning seed (42) per trial** instead of two — a budget decision taken on 19 Oct, so the seed std is 0 and the winner margin is the fixed 0.01, the best epoch comes from the single smoothed validation curve, and the frozen threshold is that seed's; the final retrain keeps four seeds):
 
-- [ ] Probe — depths 2 / 4 / 6 at BatchNorm + FFN → `Outputs/TUNING/GAT/probe.json`
-- [ ] Stage 1 · norm {none, BatchNorm, LayerNorm} → `Outputs/TUNING/GAT/s1_norm/`
-- [ ] Stage 2 · layers {2, 4, 6} → `Outputs/TUNING/GAT/s2_layers/`
-- [ ] Stage 3 · FFN {off, on} → `Outputs/TUNING/GAT/s3_ffn/`
-- [ ] Stage 4 · self-loops {on, off} (GATv2's `add_self_loops`, v1 = on; the node's attention to itself is a weighted message inside the operator, not a residual) → `Outputs/TUNING/GAT/s4_self_loops/`
-- [ ] Stage 5 · pos_weight {8, 16} → `Outputs/TUNING/GAT/s5_pos_weight/`
-- [ ] Stage 6 · LR {5e-4, 1e-3, 3e-3} → `Outputs/TUNING/GAT/s6_lr/`
-- [ ] Stage 7 · dropout {0.2, 0.3, 0.4} → `Outputs/TUNING/GAT/s7_dropout/`
-- [ ] Edge-rule trials (only if triggered)
-- [ ] Freeze → `Outputs/TUNING/GAT/recipe.json`, `trials_summary.csv`, `tuning_curves.png`
+- [x] Probe — depths 2 / 4 / 6 at BatchNorm + FFN → `Outputs/TUNING/GAT/probe.json` (Kaggle, 19–20 Oct: 2 and 4 layers pass, 6 layers dropped by the 3× rule with both lists; depth 3 probed for the edge rule → `probe_3L.json`)
+- [x] Stage 1 · norm {none, BatchNorm, LayerNorm} → `Outputs/TUNING/GAT/s1_norm/` — incumbent none kept (BatchNorm +0.006, below the 0.01 margin)
+- [x] Stage 2 · layers {2, 4, 6} → `Outputs/TUNING/GAT/s2_layers/` — incumbent 2 layers kept (6 skipped by the probe; edge trial 3 layers ran, no win)
+- [x] Stage 3 · FFN {off, on} → `Outputs/TUNING/GAT/s3_ffn/` — incumbent FFN off kept
+- [x] Stage 4 · self-loops {on, off} (GATv2's `add_self_loops`, v1 = on; the node's attention to itself is a weighted message inside the operator, not a residual) → `Outputs/TUNING/GAT/s4_self_loops/` — incumbent on kept
+- [x] Stage 5 · pos_weight {8, 16} → `Outputs/TUNING/GAT/s5_pos_weight/` — incumbent 8 kept (edge trial 4 ran, no win)
+- [x] Stage 6 · LR {5e-4, 1e-3, 3e-3} → `Outputs/TUNING/GAT/s6_lr/` — incumbent 1e-3 kept
+- [x] Stage 7 · dropout {0.2, 0.3, 0.4} → `Outputs/TUNING/GAT/s7_dropout/` — incumbent 0.3 kept
+- [x] Edge-rule trials: stage 2 → `s2_layers/l3/`, stage 5 → `s5_pos_weight/pw4/`; not triggered elsewhere
+- [x] Freeze (21 Oct) → `Outputs/TUNING/GAT/recipe.json` (= the v1 recipe unchanged, best epoch 44 on the 100-epoch cosine, threshold 0.483 for every retrain seed — the transfer view; the headline thresholds come from the per-config selection runs), `trials_summary.csv`, `tuning_curves.png`
 
 ---
 
@@ -318,26 +320,31 @@ v1 convention; the seed is a sub-folder.*
 
 ### GIN final retrain (`GIN_tuning_final.ipynb`, configs 2 / 4 / 5 / 6 × seeds 42–45, resumable across Kaggle sessions)
 
-- [ ] **GIN-2 v2** · base / base · frozen recipe, 4 seeds → `Outputs/FINAL/GIN/retrain/gin_mp-base_readout-base_dir-in/seed-<s>/`
-- [ ] **GIN-4 v2** · base+GFP / base+GFP · same recipe, epoch and threshold, 4 seeds → `Outputs/FINAL/GIN/retrain/gin_mp-full_readout-full_dir-in/seed-<s>/`
-- [ ] **GIN-5 v2** · base / base+GFP · 4 seeds → `Outputs/FINAL/GIN/retrain/gin_mp-base_readout-full_dir-in/seed-<s>/`
-- [ ] **GIN-6 v2** · base / GFP only · 4 seeds → `Outputs/FINAL/GIN/retrain/gin_mp-base_readout-gfp_dir-in/seed-<s>/`
+- [ ] Threshold selection runs (train graph, frozen recipe, 34 epochs, seed 42) for configs 2 / 4 / 5 / 6 → `Outputs/TUNING/GIN/config_thresholds/<run>/seed-42/` and `config_thresholds.json` (the frozen tuning threshold 0.654 stays as the transfer view)
+
+- [x] **GIN-2 v2** · base / base · frozen recipe, 4 seeds → `Outputs/FINAL/GIN/retrain/gin_mp-base_readout-base_dir-in/seed-<s>/`
+- [x] **GIN-4 v2** · base+GFP / base+GFP · same recipe and epoch, own threshold, 4 seeds → `Outputs/FINAL/GIN/retrain/gin_mp-full_readout-full_dir-in/seed-<s>/`
+- [x] **GIN-5 v2** · base / base+GFP · 4 seeds → `Outputs/FINAL/GIN/retrain/gin_mp-base_readout-full_dir-in/seed-<s>/`
+- [ ] **GIN-6 v2** · base / GFP only · 4 seeds → `Outputs/FINAL/GIN/retrain/gin_mp-base_readout-gfp_dir-in/seed-<s>/` (seed 42 done; 43–45 next session)
 - [ ] Summaries → `Outputs/FINAL/GIN/retrain/batch_summary_retrain.csv` (one row per run), `seed_summary_retrain.csv` (one row per config, mean ± std over the four seeds; also one file per config); per-run `sensitivity.csv`
 
 **Decision rule, fixed in advance:** nothing is chosen here. Test F1 mean ± std and PR-AUC over the four seeds are reported next
 to the v1 runs of the same configs (single seed, 20 epochs) with the protocol difference stated; the sensitivity table shows
-how much the frozen threshold matters. Configs 4, 5 and 6 reuse the epoch and the threshold tuned on config 2, so their
-numbers carry that transfer as a stated caveat; configs 1, 3 and 7 (no edge features in message passing) are not rerun.
+how much the threshold matters. Configs 4, 5 and 6 reuse the epoch tuned on config 2 (stated caveat) but get their own
+validation-chosen threshold from a selection run (config 2 as well, so all four follow one procedure); test F1 at the
+frozen tuning threshold stays in the files as the `transfer_*` view. Across configs, test PR-AUC (threshold-free) is read first, then F1 at the config's own threshold, then recall at
+the 5 % alert budget. Configs 1, 3 and 7 (no edge features in message passing) are not rerun.
 
 ### GATv2 final retrain (`GAT_tuning_final.ipynb`, configs 2 / 4 / 5 / 6 × seeds 42–45, after `Outputs/TUNING/GAT/recipe.json` exists)
 
+- [ ] Threshold selection runs for GAT configs 2 / 4 / 5 / 6 → `Outputs/TUNING/GAT/config_thresholds/`
 - [ ] **GAT-2 v2** · base / base · frozen GATv2 recipe, 4 seeds → `Outputs/FINAL/GAT/retrain/gat_mp-base_readout-base_dir-in/seed-<s>/`
 - [ ] **GAT-4 v2** · base+GFP / base+GFP · 4 seeds → `Outputs/FINAL/GAT/retrain/gat_mp-full_readout-full_dir-in/seed-<s>/`
 - [ ] **GAT-5 v2** · base / base+GFP · 4 seeds → `Outputs/FINAL/GAT/retrain/gat_mp-base_readout-full_dir-in/seed-<s>/`
 - [ ] **GAT-6 v2** · base / GFP only · 4 seeds → `Outputs/FINAL/GAT/retrain/gat_mp-base_readout-gfp_dir-in/seed-<s>/`
 - [ ] Summaries → `Outputs/FINAL/GAT/retrain/batch_summary_retrain.csv`, `seed_summary_retrain.csv`; per-run `sensitivity.csv`
 
-Same decision rule as for GIN: nothing is chosen here; configs 4, 5 and 6 reuse the epoch and the threshold tuned on GAT config 2.
+Same decision rule as for GIN: nothing is chosen on test; configs 4, 5 and 6 reuse the epoch tuned on GAT config 2 and get their own validation-chosen threshold.
 
 ---
 
@@ -368,6 +375,29 @@ Same decision rule as for GIN: nothing is chosen here; configs 4, 5 and 6 reuse 
       `GBT_VARIANT` knob and the first search space (early stopping + PR-AUC ranking are the fixed recipe);
       `GBT_reg_fixed_features.ipynb` folded into `GBT_fixed_features.ipynb`; `Progress_Report.md` §7.7
       rewritten (old §7.7 / §7.8 merged, §7.9–7.10 renumbered to §7.8–7.9); Notion left as is (skipped on request)
+- [ ] **20–21 Oct** — GATv2 tuning session 2 (second Kaggle account, 6.7 h, ran to the end): stages 1–4 skipped from the
+      committed files, the pos_weight 4 edge trial redone, stages 6 (LR) and 7 (dropout) run, no further edge trial; every
+      challenger landed 0.01–0.02 below the v1 incumbent (one seed per trial, margin 0.01), recipe frozen →
+      `Outputs/TUNING/GAT/recipe.json` = v1 unchanged, best epoch 44, val F1 0.549 (v1 GAT-2 at 20 epochs: 0.498);
+      GATv2 tuning total ≈ 18.7 GPU hours; the Kaggle GitHub link committed the executed `GAT_tuning.ipynb` (stripped
+      again). Next: `GAT_tuning_final.ipynb` (selection runs + 16 retrain runs, ≈ 28 h, resumable over sessions)
+- [ ] **20 Oct** — per-config threshold for the final retrain (decided after the GIN session-1 numbers: at config 2's
+      0.654 config 4 lost 0.04 F1 to precision while its PR-AUC was the best; its F1 was still rising at +0.10): one
+      selection run per config, config 2 included (train graph, frozen recipe, frozen epoch, seed 42, validation sweep at
+      the last epoch) → `config_thresholds.json`; `run_final` scores at the config's threshold (headline) and keeps the
+      frozen tuning threshold as the `transfer_*` view; finished runs are re-scored from their saved predictions
+      (`rescore_final_run`), nothing is retrained; `GIN_tuning_final.ipynb` / `GAT_tuning_final.ipynb` gain section 4b;
+      smoke-tested on the slice
+- [ ] **19–20 Oct** — GATv2 tuning session 1 (second Kaggle account, 12 h, cut by the session cap): probe (6 layers dropped,
+      4.9× the 2-layer epoch), stages 1–4 finished, all four kept the v1 value — none / 2 layers / no FFN / self-loops on
+      (BatchNorm +0.006 and the rest below the 0.01 margin; one seed per trial) — stage 5 ran pos_weight 8 and 16 and was
+      cut inside the pos_weight 4 edge trial, which is redone next session; files in `Outputs/TUNING/GAT/`; ≈ 68–77 s per
+      2-layer epoch, 135 s for 3 layers, 181 s for 4
+- [ ] **19–20 Oct** — GIN final retrain session 1 (Kaggle, 12 h, cut by the session cap): 13 of the 16 runs finished —
+      configs 2, 4, 5 with all four seeds, config 6 seed 42; seeds 43–45 of config 6 next session; result files in
+      `Outputs/FINAL/GIN/retrain/` (predictions and `final.pt` kept locally, not versioned); per epoch 72–78 s for
+      configs 2 / 5 / 6 (496 batches), 127 s for config 4; the seen-val threshold sweep landed 0.59–0.82 against the
+      frozen 0.654 and never beat it on test by more than the seed spread
 - [ ] **18–19 Oct** — GIN tuning session 2 (Kaggle, 5.4 h): probe re-run with the same verdict, stages 1–4
       skipped from the committed `trial.json` files, stage 5 (2.6 h) and stage 6 (2.7 h) run, no edge trial
       triggered, recipe frozen → `Outputs/TUNING/GIN/recipe.json` = v1 + BatchNorm (2 layers, no FFN,
@@ -542,7 +572,7 @@ tail alone) → `Outputs/GBT/tail_check.csv`. Nothing is chosen on these numbers
   3,379 laundering edges, 4,061,789 seeds (496 batches per epoch). RWPE, when used, comes from the val
   snapshot file. The PNA degree histogram would come from this graph (the graph trained on).
 - *`recipe.json`.* `operator`, `cfg`, `recipe` (all knobs incl. `num_neighbors`, `epochs` = T_max, `self_loops` = GATv2's `add_self_loops`, ignored by the other operators),
-  `best_epoch`, `thresholds` (one value for every retrain seed = the mean of the tuning seeds' thresholds), `tuning_thresholds`, `threshold_source`, `val_f1_mean`,
+  `best_epoch`, `thresholds` (one value for every retrain seed = the mean of the tuning seeds' thresholds; used by the tuned config and kept as the `transfer_*` view for the others), `tuning_thresholds`, `threshold_source`, `val_f1_mean`,
   `val_f1_std`, `stopped_epochs`, `source_stage`. Loaded and re-validated by the final notebook, which stops
   with a clear message if the file is missing.
 - *Final-retrain outputs.* `Outputs/FINAL/GIN/retrain/<run>/seed-<s>/`: `results.json` (plus `phase`,
