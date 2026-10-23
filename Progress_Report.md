@@ -214,6 +214,17 @@ message-passing box differs. The table lists what is fixed and the knobs that ma
 | Comparability across operators | Same number of layers (2) and same embedding dimension (128) for every operator; the parameter count may differ by operator. Total parameters over the 7 configs: GIN 103,043–131,843 · GATv2 103,041–131,585 · PNA 561,537–623,105 · Transformer 168,577–197,121 (PNA's 12 aggregator × scaler views feed a 1,664 → 128 MLP per layer; the Transformer has four 128 × 128 projections per layer where GATv2 has two) |
 | Knobs — all that may change | `OPERATOR` gin / pna / gat / transformer · `MP_EDGE_FEATS` none / base / full · `READOUT_EDGE_FEATS` base / full / gfp · `NODE_ENC` none / rwpe8 / rwpe16 (node encoding appended to the 6 entity columns; only `node_proj` widens to (6 + k) → 128 and `invariant_params` counts it at the base width 6) · `MP_DIRECTION` in / bidirectional · `TEMPORAL_SAMPLING` on / off |
 
+**Decision of 22 Oct 2026: re-tuning after Luo et al. (2024).**
+- The table above is the v1 recipe of every run in §7.1–7.7.
+- A new tuning follows Luo et al. (2024), "Classic GNNs are Strong Baselines". It tunes these knobs **separately for
+  every operator and for configs 2 and 4**: hidden size, depth, normalisation, residual (the paper's linear form or
+  none), dropout, learning rate, weight decay, `pos_weight` and the readout.
+- Protocol: 100 random trials × 2 seeds per pair, then a 5-seed retrain of each winner (rules in `EXPERIMENTS.md` §2b).
+- It runs on Cineca.
+- In those runs each config has its own recipe, so **a difference between configs 2 and 4 there mixes the feature
+  effect with the recipe**.
+- The one-pass tuning of §7.8–7.12 is superseded.
+
 ### 5.1 GIN / GINE — sum aggregation
 
 - Rule: `h_v ← MLP((1 + ε)·h_v + Σ m_u)` with learnable ε; the sum keeps multiset counts, so
@@ -222,7 +233,7 @@ message-passing box differs. The table lists what is fixed and the knobs that ma
   accounts (degree up to 168k).
 - Edge features: `GINConv` when none enter message passing; `GINEConv` otherwise, with
   `m_u = ReLU(h_u + W_e·e_uv)` — `W_e` (128 × edge width) is the only extra weight.
-- Invariant parameters 67,587. **Status: 7 runs done → §7 (v1 recipe); recipe tuned and frozen on 19 Oct → §7.8 (v1 + BatchNorm after each layer, best epoch 34); final retrain pending → §7.9.**
+- Invariant parameters 67,587. **Status: 7 runs done → §7 (v1 recipe); recipe tuned and frozen on 19 Oct → §7.8 (v1 + BatchNorm after each layer, best epoch 34); final retrain → §7.9 — both superseded on 22 Oct by the Luo tuning (§5 decision note).**
 
 ### 5.2 GATv2 — attention aggregation
 
@@ -237,7 +248,7 @@ message-passing box differs. The table lists what is fixed and the knobs that ma
 - Same two-layer template, residual, dropout; invariant parameters 67,585 (attention vectors
   and biases replace the GIN MLP).
 - Fits a Kaggle T4 at the full 8,192 seed edges per batch.
-- Invariant parameters 67,585. **Status: 7 runs done → §7.2 (v1 recipe); recipe tuned on 19–21 Oct → §7.11 (nothing beat v1: frozen = v1 with best epoch 44); final retrain pending → §7.12.**
+- Invariant parameters 67,585. **Status: 7 runs done → §7.2 (v1 recipe); recipe tuned on 19–21 Oct → §7.11 (nothing beat v1: frozen = v1 with best epoch 44); final retrain §7.12 never run — both superseded on 22 Oct by the Luo tuning (§5 decision note).**
 
 ### 5.3 PNA — several aggregators at once
 
@@ -248,7 +259,7 @@ message-passing box differs. The table lists what is fixed and the knobs that ma
 - The degree histogram is computed on the train graph only, never on val/test.
 - Invariant parameters 427,265: PNA's message MLP is larger than the GIN MLP, and its first
   Linear widens with edge features, so it is counted with the edge projections.
-- **Status: 7 runs done → §7.3.**
+- **Status: 7 runs done → §7.3; Luo tuning planned (§5 decision note).**
 
 ### 5.4 Graph Transformer — attention with edge features
 
@@ -265,7 +276,7 @@ message-passing box differs. The table lists what is fixed and the knobs that ma
   (infeasible at 5M edges); stated as a limitation.
 - Invariant parameters 133,121: four 128 × 128 projections per layer (query, key, value, skip)
   where GATv2 has two.
-- **Status: 7 runs done → §7.4.**
+- **Status: 7 runs done → §7.4; Luo tuning planned (§5 decision note).**
 
 ### 5.5 Gradient-boosted trees (LightGBM) — the no-message-passing cross-check
 
@@ -305,6 +316,8 @@ message-passing box differs. The table lists what is fixed and the knobs that ma
   scored edge (`edge_id`, probability, predicted class).
 - **Curves per run:** train/val loss, F1 and PR-AUC per epoch with a dashed line at the saved
   epoch, plus the test precision–recall curve.
+- **Luo tuning (22 Oct):** the best epoch and the winning trial are chosen on validation PR-AUC (two-seed mean). The
+  threshold is still the validation-F1 sweep at that epoch, and F1 stays the headline metric.
 
 | Metric | What it measures |
 |---|---|
@@ -1484,7 +1497,9 @@ Seed 42, all metrics, all splits (`Outputs/GBT/lightgbm_readout-full_seed-42/`; 
 - **Leakage check:** test ≤ validation in every seed and on every metric; the bank target encoding verified train-label-only (above); the GFP block is built from ids, time and amount only.
 - **Runtime (from the logs):** search 1.35 h for 193 fits; final seeds 27–54 min each (fit plus checkpoints every 25 rounds), all on 16 CPU threads.
 
-### 7.8 GIN recipe tuning — one knob at a time on config 2 (2 seeds per trial, 17–19 Oct)
+### 7.8 GIN recipe tuning — one knob at a time on config 2 (2 seeds per trial, 17–19 Oct) — *SUPERSEDED*
+
+*Superseded on 22 Oct 2026 by the Luo et al. (2024) tuning (§5, `EXPERIMENTS.md` §2b): hidden 128 and 2 layers were fixed and only config 2 was tuned. Kept for the record.*
 
 Every run above uses the v1 recipe (2 layers, hidden 128, dropout 0.3, no normalisation after the layers, Adam 1e-3 with a 20-epoch cosine, `pos_weight` 8), fixed a priori and never tuned. After the 13 Oct meeting the recipe is tuned **once per operator on config 2 (base / base)** and then frozen for every feature config of that operator; GIN goes first. The protocol was written down before the first run (`EXPERIMENTS.md` §2b): hyperparameters are tuned **sequentially, one at a time, in a pre-registered order, selected on validation only** — normalisation → depth → FFN → `pos_weight` → learning rate → dropout (architecture first, regularisation last); Luo et al. (2024) and GNN+ (2025) also used non-exhaustive searches. Each trial trains seeds 42 and 43 with cosine T_max 100 and early stopping (3-epoch moving average of validation F1 flat for 10 epochs, never before epoch 20); its score is the seed-mean validation F1 at the best epoch of the smoothed seed-mean curve; a challenger replaces the incumbent only if it wins by more than max(0.01, the larger seed std), ties go to the simpler incumbent, and a winner at the edge of its grid triggers one extra trial one step beyond. Train and validation are scored from the checkpoints at that epoch, so the train / validation gap is comparable across trials. The test split is never loaded. Everything runs from `GIN_tuning.ipynb` through `gnn_core.py` (`run_tuning_trial`, `choose_winner`, `probe_depths`, `save_recipe`); artifacts in `Outputs/TUNING/GIN/`.
 
@@ -1526,11 +1541,15 @@ The incumbent row (BatchNorm, 2 layers, no FFN, `pos_weight` 8, LR 1e-3, dropout
 - **Read with the rule in mind.** The margin is max(0.01, the larger seed std), and the incumbent's std was 0.019 from stage 1 on, so a challenger needed ≥ +0.02 to win: the rule is conservative by design and prefers the simpler incumbent. Two seeds per trial leave the ranking among the 0.58–0.60 challengers unresolved; only the BatchNorm gain is clearly outside the spread. Selection used validation only; the test number of this recipe comes from the final retrain of §7.9 (train + val graph, 4 seeds, frozen epoch and thresholds), not from here.
 - **Runtime (from the Kaggle logs, T4):** session 1 (17–18 Oct) 12 h — probe, stages 1–4 and the first trial of stage 5, cut by the session cap; session 2 (18–19 Oct) 5.4 h — stage 5 (2.6 h) and stage 6 (2.7 h), the cut trial redone from scratch, the probe re-run with the same verdict. 15 trials (11 trained, the incumbent copied 5 times), 2 seeds each, 20–55 epochs per seed, ≈ 17.4 GPU hours in all.
 
-### 7.9 GIN v2 — final retrain on train + val with the frozen recipe (`GIN_tuning_final.ipynb`)
+### 7.9 GIN v2 — final retrain on train + val with the frozen recipe (`GIN_tuning_final.ipynb`) — *SUPERSEDED*
+
+*Superseded on 22 Oct 2026 together with §7.8; 13 of its 16 runs had finished (files in `Outputs/FINAL/GIN/retrain/`), the rest will not run.*
 
 *Pending: configs 2, 4, 5 and 6 (the ones with edge features in message passing; 1, 3 and 7 are not rerun), seeds 42–45 each, 34 epochs on the train + val graph (496 batches per epoch instead of 372 — ~33 % more update steps at the same per-epoch LR profile, reported as a limitation), test scored once per seed at the config's own validation-chosen threshold (one selection run per config on the train graph with the frozen recipe and epoch, seed 42; the frozen tuning threshold 0.654 is kept as the transfer view); test F1 and PR-AUC as mean ± std, threshold-sensitivity tables, validation reported as "seen"; next to it, per seed, the test metrics at the frozen tuning threshold (the transfer view) and at the threshold re-swept on the seen validation rows (both secondary, never the headline; PR-AUC is threshold-free and read first). Results → `Outputs/FINAL/GIN/retrain/`.*
 
-### 7.11 GATv2 recipe tuning — the same protocol, one seed per trial (19–21 Oct)
+### 7.11 GATv2 recipe tuning — the same protocol, one seed per trial (19–21 Oct) — *SUPERSEDED*
+
+*Superseded on 22 Oct 2026 by the Luo et al. (2024) tuning (§5, `EXPERIMENTS.md` §2b): hidden 128 and 2 layers were fixed and only config 2 was tuned. Kept for the record.*
 
 The GATv2 family was tuned with the procedure of §7.9 on GAT config 2 (base / base), on a second Kaggle account in parallel with the GIN retrain, with two differences fixed before the first run: **one seed per trial** (42; a budget decision, so the seed std is 0 and the winner margin is the fixed 0.01), and **one extra stage for GATv2's own knob, the self-loop** (PyG's `add_self_loops`, on in v1: node i also attends to itself through the attention weights — a weighted message inside the operator, not a residual; the GATv2 layer has exactly one residual, the shared outer one). Order: normalisation → layers → FFN → self-loops → pos_weight → learning rate → dropout. Heads stay 4 × 32. Everything runs from `GAT_tuning.ipynb` through the shared code; artifacts in `Outputs/TUNING/GAT/`.
 
@@ -1571,7 +1590,9 @@ The GATv2 family was tuned with the procedure of §7.9 on GAT config 2 (base / b
 - **One seed per trial is the stated weakness** of this tuning: with the margin at the fixed 0.01, a +0.006 cannot be told from noise, and a second seed might have moved BatchNorm either way. The decision was taken for budget reasons and is reported as such; the final retrain uses four seeds as for GIN.
 - **Runtime (Kaggle T4, second account):** session 1 (19–20 Oct) 12 h — probe, stages 1–4, pos_weight 8 and 16, cut inside the pos_weight 4 edge trial; session 2 (20–21 Oct) 6.7 h — that trial redone, stages 6 and 7. 20 trials, 13 trained and 7 copies of the incumbent, 36–72 epochs each, ≈ 18.7 GPU hours.
 
-### 7.12 GATv2 v2 — final retrain on train + val with the frozen recipe (`GAT_tuning_final.ipynb`)
+### 7.12 GATv2 v2 — final retrain on train + val with the frozen recipe (`GAT_tuning_final.ipynb`) — *SUPERSEDED*
+
+*Superseded on 22 Oct 2026 together with §7.11; never run.*
 
 *Pending: configs 2, 4, 5 and 6, seeds 42–45 each, 44 epochs on the train + val graph, one validation-chosen threshold per config from a selection run (the tuning threshold 0.483 as the transfer view), test scored once per run; test PR-AUC and F1 as mean ± std, threshold-sensitivity tables, validation reported as "seen". Estimated ≈ 28 GPU hours (selection runs ≈ 4 h, 2-layer retrain runs ≈ 75 min each, config 4 ≈ 130 min each), resumable over sessions. Results → `Outputs/FINAL/GAT/retrain/`.*
 
@@ -1590,10 +1611,13 @@ The GATv2 family was tuned with the procedure of §7.9 on GAT config 2 (base / b
 | `RWPE_fixed_architecture.ipynb` | the same Kaggle notebook for the node-encoding runs of §7.5: config entries carry `operator` and `node_enc` (all eight runs in one session), RWPE files from the Kaggle dataset `hi-small-rwpe`; summary `batch_summary_rwpe.csv` per family |
 | `GFP_fixed_architecture.ipynb` | the same Kaggle notebook for the data-tuned GFP runs of §7.6: config entries carry `operator` and `gfp_variant` (all eight runs in one session), the tuned sheet from the Kaggle dataset `hi-small-gfp-tuned` swapped into the GFP block at load time; summary `batch_summary_gfp_tuned.csv` per family |
 | `GBT_fixed_features.ipynb` / `gbt_core.py` | the GBT cross-check of §7.7: LightGBM on the same 93 inputs, no message passing, every fit stopped on the weighted validation loss; `gbt_core.py` builds the row from the graph files, runs the resumable successive-halving search and the final seeds with validation checkpoints, and imports threshold sweep, metrics, curves and batch summary from `gnn_core.py`; runs locally on CPU. The notebook ends with a clearly labelled appendix, outside the protocol: `gbt_core.tail_check` scores the finished boosters on the test window including the removed tail days (features of the tail rows rebuilt from the raw file) |
-| `GIN_tuning.ipynb` / `GIN_tuning_final.ipynb` | recipe tuning of §7.8 (config 2, six pre-registered stages, 2 seeds per trial, resumable across Kaggle sessions, never loads test; committed without outputs — every number is in `Outputs/TUNING/GIN/`) and the final retrain of §7.9 (train + val graph built in memory, seeds 42–45, frozen epoch and thresholds); the tuning helpers (`run_tuning_trial`, `choose_winner`, `probe_depths`, `save_recipe` / `load_recipe`, `make_trainval_graph`, `run_final`) live in `gnn_core.py` |
+| `GIN_tuning.ipynb` / `GIN_tuning_final.ipynb` (*superseded 22 Oct*) | recipe tuning of §7.8 (config 2, six pre-registered stages, 2 seeds per trial, resumable across Kaggle sessions, never loads test; committed without outputs — every number is in `Outputs/TUNING/GIN/`) and the final retrain of §7.9 (train + val graph built in memory, seeds 42–45, frozen epoch and thresholds); the tuning helpers (`run_tuning_trial`, `choose_winner`, `probe_depths`, `save_recipe` / `load_recipe`, `make_trainval_graph`, `run_final`) live in `gnn_core.py` |
 | `Outputs/TUNING/GAT/` | the same files for the GATv2 tuning of §7.11 (seven stages, one seed per trial) and its frozen `recipe.json`; `GAT_tuning.ipynb` / `GAT_tuning_final.ipynb` are the GIN pair with the operator switched |
 | `Outputs/TUNING/GIN/` | `probe.json`, `probe_3L.json`; per stage `s<k>_<knob>/<trial>/trial.json` + `seed-<s>/history.csv`, `curves.png` and `stage_summary.csv`; `trials_summary.csv`, `tuning_curves.png`; **`recipe.json`** — the frozen GIN recipe, the only copy of its numbers |
-| `Outputs/FINAL/GIN/retrain/<run>/seed-<s>/` | (pending, §7.9) `results.json`, `history.csv`, `curves.png`, `sensitivity.csv`, `predictions.csv` (not versioned) • `batch_summary_retrain.csv`, `seed_summary_retrain.csv` |
+| `cineca/` | the Luo tuning of §5 (decision note), run on Cineca by Loris: `config.sh` (the only file he edits), `run_step.sh` (check / probe / draw / tune / aggregate / final), `status.sh`, `pack_results.sh`, the step scripts (`probe.py`, `draw_trials.py`, `tune.py`, `aggregate.py` with the correctness checks, `final.py`), `*.sbatch`, `setup_env.sh` + `requirements.lock`, `README_LORIS.md`; `make_handoff.sh` / `make_env_pack.sh` build the archives for Loris on the laptop |
+| `Outputs/TUNING_LUO/` | (pending) `trials_space.json` (the pre-registered trial list), `logs/`, per family `probe.json`; per run `trials/t<id>/` (`trial.json`, seed-mean `curves.png`, `seed-<s>/` history, curves, `done.json`, `best.pt` not versioned), `trials_summary.csv`, `tuning_curves.png`, `recipe.json` |
+| `Outputs/FINAL_LUO/<FAMILY>/<run>/seed-<s>/` | (pending) the 5-seed retrain of each Luo winner: `results.json`, `history.csv`, `curves.png`, `sensitivity.csv`, `predictions.csv` and `final.pt` (not versioned) • `batch_summary_final.csv`, `seed_summary_final.csv` |
+| `Outputs/FINAL/GIN/retrain/<run>/seed-<s>/` | (superseded 22 Oct; 13 of 16 runs, §7.9) `results.json`, `history.csv`, `curves.png`, `sensitivity.csv`, `predictions.csv` (not versioned) • `batch_summary_retrain.csv`, `seed_summary_retrain.csv` |
 | `run_gfp_wsl.py` | causal batched GFP bridge (Windows snapml lacks GFP → runs in WSL) |
 | `Progress_Report.md` / `EXPERIMENTS.md` | markdown mirrors of this page (with the reference list) and of the experiments page — Notion is the main copy |
 | `Outputs/<FAMILY>/<run>/` (GIN, GAT, PNA, TRANSFORMER) | results.json (all splits, all metrics), history.csv, curves.png, best.pt, predictions.csv (the last two not versioned) • batch_summary.csv per batch |

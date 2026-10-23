@@ -37,13 +37,13 @@ Mirrored on the Notion experiments page (kept in sync).
       section 3 "GBT cross-check runs"); results in `Progress_Report.md` §7.7 (test F1 level with the
       best GIN run, above GATv2, well below PNA and the Transformer; a first, wider search without early
       stopping memorised the train rows and was dropped on 20 Oct)
-- [ ] **GIN recipe tuning** (decided 17 Oct, after the 13 Oct meeting) — the training recipe is tuned once
+- [ ] *SUPERSEDED (22 Oct)* **GIN recipe tuning** (decided 17 Oct, after the 13 Oct meeting) — the training recipe is tuned once
       per operator on config 2 and then frozen; GIN first, PNA / GATv2 / Transformer later with the same code
       and notebook template. Rules and stage tracker in section 2b. **Tuning done (two Kaggle sessions, 17–19
       Oct): `Outputs/TUNING/GIN/recipe.json` frozen = v1 + BatchNorm after each MP layer, best epoch 34.**
       Next: `GIN_tuning_final.ipynb` retrains on train + val with 4 seeds (section 3b); results →
       `Progress_Report.md` §7.8–7.9
-- [ ] **GATv2 recipe tuning** (started 19 Oct on the second Kaggle account, in parallel with the GIN retrain) — the same
+- [ ] *SUPERSEDED (22 Oct)* **GATv2 recipe tuning** (started 19 Oct on the second Kaggle account, in parallel with the GIN retrain) — the same
       pre-registered protocol on GAT config 2 (`GAT_tuning.ipynb` → `Outputs/TUNING/GAT/recipe.json`, tracker in
       section 2b). **Tuning done (two sessions, 19–21 Oct): no knob beat the v1 recipe, frozen = v1 unchanged with
       best epoch 44 on the 100-epoch cosine** (results in `Progress_Report.md` §7.11). Next: `GAT_tuning_final.ipynb` on
@@ -51,6 +51,12 @@ Mirrored on the Notion experiments page (kept in sync).
       the outer residual is the only residual in the GATv2 layer (PyG's `residual` option stays off, as in v1); one
       extra stage, self-loops {on, off} (`add_self_loops`), sits between FFN and pos_weight; one seed per trial
       (budget), noted as the one protocol difference from GIN
+- [ ] **Luo et al. (2024) re-tuning — every operator × configs 2 and 4** (decided 22 Oct; replaces the two tuning items
+      above and their final retrains, whose files stay as they are) — random search over the paper's space plus our
+      additions, 100 trials × 2 seeds per (operator, config), then a 5-seed retrain on train + val of each winner; runs on
+      Cineca (Leonardo Booster) by Loris from `cineca/`. Rules and tracker in section 2b, retrain rows in section 3b.
+      Package checked locally on the slice (22 Oct) and sent to Loris (23 Oct); next: check → probe → draw → early
+      check-in on trials 0–9
 
 ---
 
@@ -108,7 +114,94 @@ dropout 0.3, identical training recipe — so only the aggregation rule differs.
 
 ---
 
-## 2b · Recipe tuning — one pass per operator, then frozen (GIN first)
+## 2b · Recipe tuning — Luo et al. (2024), per operator and per config (decided 22 Oct 2026)
+
+**What:** the training recipe is re-tuned following Luo et al. (2024), "Classic GNNs are Strong Baselines", as closely
+as possible, separately for every operator (GIN, PNA, GATv2, Transformer) **and** for config 2 (mp base / readout base)
+and config 4 (mp full / readout full). That makes 8 independent tunings, each with its own frozen recipe, best epoch and
+threshold, followed by a 5-seed retrain of each winner (section 3b).
+**Why:** the one-pass tuning below kept hidden 128 and 2 layers fixed and tuned on config 2 only. The paper shows that
+classic GNNs need their own width, depth, normalisation, residual and dropout to be compared fairly.
+**Consequence:** hidden size, depth and readout now differ between configs 2 and 4. **Each config is compared at its
+own tuned recipe, so a difference between configs 2 and 4 mixes the feature effect with the recipe.** The
+fixed-architecture comparison of the v1 grid (section 3) is unchanged.
+**Where:** on Cineca (Leonardo Booster, A100 64 GB). Loris runs it from `cineca/` (`cineca/README_LORIS.md`); Sandro has
+no Cineca access. Results come back as archives and are committed as usual.
+
+**Protocol, fixed before any trial runs:**
+
+| Item | Rule |
+|---|---|
+| Search | Random search: **100 trials per (operator, config)**, so 800 trials. The supervisor asked for at least 100. The full grid (64,800 non-depth cells × 10 depths) is far too large; GNN+ (Luo et al. 2025) is non-exhaustive too ("we do not perform an exhaustive search") |
+| The draw | Trial 0 = the v1 knobs. Trials 1–99 are drawn **once**, after the probe and before any training, with a fixed seed (20261022), by `gnn_core.draw_luo_trials`. It is a partial Fisher–Yates shuffle of the 64,800 cells, the same cells for every operator and both configs, plus a depth drawn from each operator's depths that fit. The draw is prefix-stable and uses Python's version-stable `random.random()`. Output: `Outputs/TUNING_LUO/trials_space.json`, the pre-registration |
+| Seeds | **2 per trial (42, 43)**, run as separate GPU jobs → 200 runs per pair, 1,600 in all |
+| Training | Adam at a **constant LR**, **100 epochs, no early stopping** (tunedGNN `medium_graph/main.py`). Train and validation are scored every epoch with every section-4 metric. The test split is never loaded (asserted and logged by every task) |
+| Best epoch | argmax of the **seed-mean validation PR-AUC** curve (raw, first epoch on ties), not the mean of the per-seed best epochs |
+| Metrics of a trial | Every metric on train and validation at that epoch, per seed and as mean ± std. They are read from `history.csv`, i.e. the same predictions the epoch was chosen on |
+| Threshold | Mean of the two seeds' validation-F1-maximising thresholds at the best epoch (per-seed values kept) |
+| Winner | Highest mean val PR-AUC, tie-break mean val F1. **F1 stays the headline metric in every table.** A winner whose best epoch is in 91–100 is flagged |
+| Failed trials | A seed with non-finite predictions stops there; the trial is scored over the epochs both seeds reached and flagged `diverged_at`. A seed out of GPU memory makes the trial `oom` (no metrics, cannot win) |
+| Depths | 1–10 minus those that do not fit in GPU memory; there is no time rule. The probe runs at the heaviest setting (hidden 512, BatchNorm, linear residual, readout 3 × 2, config 4). A depth fits when nothing runs out of memory and the peak reserved memory is ≤ 85 % of the GPU; the fallback neighbour list is tried when the primary one does not fit, and the probe stops at the first depth that fits with neither list |
+| Neighbours per hop | Hops 1–2 100, hops 3–4 50, hops 5+ 25. Fallback: hops 3–4 25, hops 5+ 10 |
+| Loader workers | The probe times 0 / 4 / 6 sampling worker processes and the fastest is used. Workers are non-persistent, so resume stays exact (checked locally) |
+| Final | The winner is retrained on train + val for its best epoch, seeds 42–46, at the frozen threshold. Test is scored once per seed; mean ± std. The separate threshold-selection run is not needed: the winning trial already is two train-only runs of the recipe, validated at the frozen epoch |
+| Checks | Asserts inside `cineca/aggregate.py`, run every time (also from `pack_results.sh`). Every trial: 100 epochs × 2 seeds, constant LR, recipe = `trials_space.json`, test never loaded, best epoch recomputed from the two histories, `trial.json` values = `history.csv`, parameter count = the recipe's model, no NaN. Winner: max mean val PR-AUC. Final runs: seeds 42–46, stop epoch and threshold = `recipe.json`, test never scored during training (no test column in `history.csv`). Trial 0 vs the v1 run of the same config is printed as a warning only |
+
+**Search space:**
+
+| Knob | Values | Source |
+|---|---|---|
+| Learning rate | {0.0005, 0.001, 0.003, 0.005, 0.01} | Luo §4 {0.001, 0.005, 0.01} + 0.0005 / 0.003 from its large-graph rows (Tables 8–10) |
+| Hidden dim | {64, 128, 256, 512}: one value for the node embedding, the MP edge projections, every MP layer and the readout base; GATv2 / Transformer 4 heads × hidden/4 | Luo §4 {64, 256, 512}; **128 is our addition** (the size of every earlier run) |
+| Normalisation after each MP layer | {none, BatchNorm, LayerNorm} | Luo §4 |
+| Residual | {linear, none}: linear `h ← Dropout(ReLU(Norm(conv(h) + W_r h)))`, none `h ← Dropout(ReLU(Norm(conv(h))))` | Luo Eq. 7, tunedGNN `medium_graph/model.py` |
+| Dropout (after the activation, also in the readout) | {0.2, 0.3, 0.5, 0.7} | Luo §4 |
+| Weight decay (Adam) | {0, 5e-5, 5e-4, 1e-3, 1e-2} | tunedGNN run scripts; the paper's text names none |
+| MP layers | {1, …, 10} minus the memory-dropped depths | Luo §4 |
+| pos_weight | {4, 8, 16} | **our addition** (supervisor) |
+| Readout layers | {1, 2, 3}: 1 = a single `Linear(2h + e → 1)` (the paper's head), 2 = the v1 readout, 3 = one more hidden layer; each hidden layer is Linear → ReLU → Dropout | **our addition** (the paper does not tune the head) |
+| Readout width | {0.5, 1, 2} × hidden per readout hidden layer; drawn but unused when readout layers = 1 (recorded as unused) | **our addition** |
+| Fixed | batch 8,192 seed edges, FFN off, GATv2 self-loops on, PNA aggregators / scalers / towers | — |
+
+**Deviations from the paper:**
+
+| Ours | Paper / tunedGNN | Reason |
+|---|---|---|
+| Train + val retrain at the frozen epoch, 5 seeds | test at the best-validation epoch of the same run, 5 runs | Supervisor's protocol |
+| 100-epoch cap | per-dataset epochs 100–2,500, mostly full-batch | Our epochs are mini-batch (~372 steps each); winners with a best epoch in 91–100 are flagged |
+| Random search, 100 trials | not stated (a subset of the grid) | 648,000 configurations per pair |
+| 2 seeds per tuning trial | tuning seeds not stated | Noise control at an affordable cost |
+| Best epoch and winner chosen on val PR-AUC (tie-break val F1) | the dataset's own metric | With only 2 seeds per trial the best-threshold F1 is noisy and optimistic; PR-AUC needs no threshold (the same choice as our GBT search) |
+| pos_weight, hidden 128, readout layers / width tuned | not in the space | Our additions (above) |
+| Edge classification on a temporal multigraph, neighbour sampling [100, 100, …] with 8,192 seed edges | node classification; ogbn-proteins code uses fanout 32 and 10 batches per epoch | Our task and loader |
+| A depth is kept only if it fits with a 15 % memory margin | not specified | A mid-trial OOM would waste GPU time |
+| Fixed operator internals (4 heads, GATv2 self-loops, PNA aggregators / scalers / towers) | — | Kept as in v1 |
+| Trial 0 = v1 knobs (identity residual, wd 1e-5, outside the grid) | — | Shows whether tuning beats v1 |
+
+Matches the paper: Adam, constant LR (tunedGNN), full epochs with best-validation-epoch selection, linear residual, FFN
+off, no jumping knowledge, 5 final seeds. The epoch counts of ogbn-proteins in the paper are 100 (GCN) and 1,000
+(GraphSAGE, GAT).
+
+**Tracker** (pointer = the folder; no numbers here):
+
+- [x] Package `cineca/` + the `gnn_core.py` extensions; regression check (`recipe=None` unchanged) and local smoke test
+      on the slice (22 Oct)
+- [x] **23 Oct** — Hand-off to Loris: `handoff_loris.zip` on Google Drive (`README_LORIS.md` + `handoff_code.tar.gz` + `handoff_data.tar.gz`)
+- [ ] Environment check on a GPU node (`run_step.sh check`)
+- [ ] Probe ×4 → `Outputs/TUNING_LUO/<FAMILY>/probe.json` (depths that fit, loader workers, job memory)
+- [ ] Draw → `Outputs/TUNING_LUO/trials_space.json`
+- [ ] Early check-in: trials 0–9 of every pair → `results_small.tar.gz` to Sandro before the rest
+- [ ] Tuning GIN config 2 / config 4 → `Outputs/TUNING_LUO/GIN/<run>/` (`trials/`, `trials_summary.csv`, `tuning_curves.png`, `recipe.json`)
+- [ ] Tuning PNA config 2 / config 4 → `Outputs/TUNING_LUO/PNA/<run>/`
+- [ ] Tuning GATv2 config 2 / config 4 → `Outputs/TUNING_LUO/GAT/<run>/`
+- [ ] Tuning Transformer config 2 / config 4 → `Outputs/TUNING_LUO/TRANSFORMER/<run>/`
+- [ ] Aggregate (checks pass, 8 winners frozen)
+
+### 2b (old) · One-pass recipe tuning on config 2 — *SUPERSEDED (22 Oct 2026)*
+
+*Kept for the record, not continued. This tuning kept hidden 128 and 2 layers fixed, ran on config 2 only and reused
+that recipe for every config. It is replaced by the Luo tuning above. Its files stay where they are
+(`Outputs/TUNING/GIN`, `Outputs/TUNING/GAT`, `Outputs/FINAL/GIN`).*
 
 Hyperparameters were tuned sequentially, one at a time, in a pre-registered order, selected on validation
 only; Luo et al. (2024) and GNN+ (2025) also used non-exhaustive searches. The recipe is tuned on
@@ -312,13 +405,32 @@ stored alongside), x0 = 100 vs 1000 with a narrower search space, LightGBM 4.6 v
 
 ---
 
-## 3b · Runs v2 — tuned recipes (GIN first)
+## 3b · Runs v2 — tuned recipes
 
 *Runs with a frozen recipe from section 2b. The final retrain uses the train + val graph, the frozen epoch
 and threshold, and scores test once per seed; summaries give mean ± std over the seeds. Run names keep the
 v1 convention; the seed is a sub-folder.*
 
-### GIN final retrain (`GIN_tuning_final.ipynb`, configs 2 / 4 / 5 / 6 × seeds 42–45, resumable across Kaggle sessions)
+### Luo-tuned final retrain (Cineca, `cineca/final.py`; 8 pairs × seeds 42–46, after `aggregate` froze each `recipe.json`)
+
+- [ ] **GIN-2 Luo** · base / base → `Outputs/FINAL_LUO/GIN/gin_mp-base_readout-base_dir-in/seed-<s>/`
+- [ ] **GIN-4 Luo** · base+GFP / base+GFP → `Outputs/FINAL_LUO/GIN/gin_mp-full_readout-full_dir-in/seed-<s>/`
+- [ ] **PNA-2 Luo** · base / base → `Outputs/FINAL_LUO/PNA/pna_mp-base_readout-base_dir-in/seed-<s>/`
+- [ ] **PNA-4 Luo** · base+GFP / base+GFP → `Outputs/FINAL_LUO/PNA/pna_mp-full_readout-full_dir-in/seed-<s>/`
+- [ ] **GAT-2 Luo** · base / base → `Outputs/FINAL_LUO/GAT/gat_mp-base_readout-base_dir-in/seed-<s>/`
+- [ ] **GAT-4 Luo** · base+GFP / base+GFP → `Outputs/FINAL_LUO/GAT/gat_mp-full_readout-full_dir-in/seed-<s>/`
+- [ ] **TR-2 Luo** · base / base → `Outputs/FINAL_LUO/TRANSFORMER/transformer_mp-base_readout-base_dir-in/seed-<s>/`
+- [ ] **TR-4 Luo** · base+GFP / base+GFP → `Outputs/FINAL_LUO/TRANSFORMER/transformer_mp-full_readout-full_dir-in/seed-<s>/`
+- [ ] Summaries per pair: `batch_summary_final.csv`, `seed_summary_final.csv`; per seed `sensitivity.csv`, `predictions.csv`
+
+**Decision rule, fixed in advance:** nothing is chosen on test. For each pair, report test F1 and PR-AUC as mean ± std
+over the 5 seeds, with the threshold-sensitivity table and validation marked as seen. Configs 2 and 4 of an operator are
+each at their own tuned recipe, so their difference mixes features and recipe; say so wherever they are compared.
+Across operators, read test PR-AUC (threshold-free) first, then F1 at the frozen threshold.
+
+### GIN final retrain (`GIN_tuning_final.ipynb`, configs 2 / 4 / 5 / 6 × seeds 42–45, resumable across Kaggle sessions) — *SUPERSEDED (22 Oct)*
+
+*Kept as it is; GIN-6 seeds 43–45 and the summaries will not be run. Replaced by the Luo-tuned retrain above.*
 
 - [ ] Threshold selection runs (train graph, frozen recipe, 34 epochs, seed 42) for configs 2 / 4 / 5 / 6 → `Outputs/TUNING/GIN/config_thresholds/<run>/seed-42/` and `config_thresholds.json` (the frozen tuning threshold 0.654 stays as the transfer view)
 
@@ -335,7 +447,7 @@ validation-chosen threshold from a selection run (config 2 as well, so all four 
 frozen tuning threshold stays in the files as the `transfer_*` view. Across configs, test PR-AUC (threshold-free) is read first, then F1 at the config's own threshold, then recall at
 the 5 % alert budget. Configs 1, 3 and 7 (no edge features in message passing) are not rerun.
 
-### GATv2 final retrain (`GAT_tuning_final.ipynb`, configs 2 / 4 / 5 / 6 × seeds 42–45, after `Outputs/TUNING/GAT/recipe.json` exists)
+### GATv2 final retrain (`GAT_tuning_final.ipynb`, configs 2 / 4 / 5 / 6 × seeds 42–45, after `Outputs/TUNING/GAT/recipe.json` exists) — *SUPERSEDED (22 Oct), never run*
 
 - [ ] Threshold selection runs for GAT configs 2 / 4 / 5 / 6 → `Outputs/TUNING/GAT/config_thresholds/`
 - [ ] **GAT-2 v2** · base / base · frozen GATv2 recipe, 4 seeds → `Outputs/FINAL/GAT/retrain/gat_mp-base_readout-base_dir-in/seed-<s>/`
@@ -364,6 +476,19 @@ Same decision rule as for GIN: nothing is chosen on test; configs 4, 5 and 6 reu
 ## Log
 
 *Newest first. Unticked = in progress · ticked = finished and synced.*
+
+- [ ] **22 Oct** — Luo et al. (2024) re-tuning decided and packaged for Cineca (Loris runs it; Sandro has no access):
+      every operator × configs 2 and 4, random search of 100 trials × 2 seeds over the paper's space plus our additions,
+      constant LR, 100 epochs without early stopping, best epoch and winner on the seed-mean val PR-AUC, 5-seed retrain on
+      train + val (rules section 2b). New recipe knobs in `gnn_core.py`: `residual` (identity = v1 | linear | none),
+      `readout_layers`, `readout_width`, `lr_schedule` (cosine = v1 | constant), `num_workers`, `select_metric` (f1 =
+      v1 | pr_auc). Also new: resume from `resume.pt`, the memory probe (which fixes a
+      tensor leak after an out-of-memory error), `load_graphs(splits=...)`, the draw and two-seed finalisation.
+      `recipe=None` regression on the slice: every v1 path is identical (histories, checkpoints, predictions, results)
+      and old checkpoints load strictly. `cineca/` package and end-to-end smoke test on the slice from a scratch copy.
+      The GIN / GATv2 one-pass tuning and the GIN retrain are SUPERSEDED (files kept). Estimate before the probe (T4
+      timings, ±50 %): ≈ 15,000 GPU-h if the expected depths fit, ≈ 27,000 if every depth fits. Next: hand-off,
+      probe, draw, early check-in
 
 - [x] **20 Oct** — tail-window side check moved from a scratch script into the repo: appendix of
       `GBT_fixed_features.ipynb` (clearly marked as outside the protocol) + `gbt_core.tail_check`, result
@@ -578,6 +703,44 @@ tail alone) → `Outputs/GBT/tail_check.csv`. Nothing is chosen on these numbers
 - *Final-retrain outputs.* `Outputs/FINAL/GIN/retrain/<run>/seed-<s>/`: `results.json` (plus `phase`,
   `stop_epoch`, `frozen_threshold`, `val_seen`, the recipe block), `history.csv` (train-mode mini-batch loss
   per epoch), `curves.png`, `sensitivity.csv`, `predictions.csv` (not versioned).
+
+**Luo tuning** (section 2b; `gnn_core.py` last section, `cineca/`):
+- *Knobs* (defaults = v1, so `recipe=None` is unchanged):
+  - `residual` (identity | linear | none): linear registers `layers.i.residual_proj` (counted as invariant).
+  - `readout_layers` (1 | 2 | 3) / `readout_width` (× hidden): the classifier stays `classifier.0 …`, and
+    `classifier.0.` is always the width-dependent first Linear.
+  - `lr_schedule` (cosine | constant = `LambdaLR(1.0)`).
+  - `num_workers` (loader workers, non-persistent).
+  - `select_metric` (f1 | pr_auc): picks `best.pt`, the seed-mean best epoch and the winner.
+  - `recipe_tag` adds `reslin`, `nores`, `ro<k>`, `rw<w>`, `lrconst`; `num_workers` and `select_metric` are not in
+    the tag.
+- *Folders:* `Outputs/TUNING_LUO/trials_space.json`, `logs/`.
+  - Per family: `probe.json`.
+  - Per run (`<model>_mp-<mp>_readout-<ro>_dir-in`): `trials/t<id>/trial.json`, `curves.png` (seed means), and
+    `seed-<s>/{history.csv, curves.png, done.json, best.pt}`.
+  - Per run, also `trials_summary.csv`, `tuning_curves.png`, `recipe.json`.
+  - Final: `Outputs/FINAL_LUO/<FAMILY>/<run>/seed-<s>/{results.json, history.csv, curves.png, sensitivity.csv,
+    predictions.csv, final.pt}` (results.json written last), plus `batch_summary_final.csv` and `seed_summary_final.csv`.
+- *`trials_space.json`:*
+  - draw seed, N, the space and the protocol;
+  - allowed / dropped depths per operator (the reasons are in each `probe.json`);
+  - every trial's full recipe (with its neighbour list and loader workers) and tag (`readout_width_used`).
+  - The job memory is computed from `probe.json` at submit time (`MEM=auto`).
+  - Array index i of a tuning job = trial i // 2, seed 42 + i % 2.
+- *Resume:*
+  - `train_one_run` / `train_fixed_epochs` write `resume.pt` last in every epoch, atomically. It holds the model,
+    optimizer, scheduler, history, best / patience state and every RNG state.
+  - A resubmitted job continues at the next epoch: bit-exact on CPU with 1 thread (tested), up to GPU scatter (or
+    multi-thread CPU) summation-order nondeterminism otherwise.
+  - `done.json` (written last) marks a finished seed; `trial.json` a finished trial; `results.json` (written last) a
+    finished final seed.
+- *Checkpoints:* every epoch's checkpoint is kept until both seeds of the trial are done; then `finalise_trial` keeps
+  the best epoch's as `seed-<s>/best.pt`, deletes the rest and `resume.pt`, and writes `trial.json` last (CPU only,
+  from the two histories). Only the task of the seed that finished last runs it, so two processes never finalise the
+  same trial at once; `aggregate.py` finalises a trial left over (e.g. cut by the time limit) once its last seed
+  finished over 10 minutes ago.
+- *Job memory:* 1.5 × the probe's peak CPU memory (main + workers) + 4 GB, rounded up to 8 GB (final + 8 GB);
+  `MEM=auto` in `config.sh`.
 
 **Protocol, architecture, artifacts and standing rules:** see `CLAUDE.md` §3–§6. Nothing is
 "done" until results are pushed and this file, `Progress_Report.md` and both Notion pages agree.

@@ -54,7 +54,25 @@ they are available). Never leave a number in one place that contradicts another.
 
 ## 3. The fixed architecture — never change it
 
-**Status (19 Oct 2026):** the table below is the **v1 recipe**, fixed a priori for every finished run.
+**Decision of 22 Oct 2026 — Luo et al. (2024) re-tuning (supersedes the one-pass tuning described next).** The recipe
+is re-tuned following Luo et al. (2024) as closely as possible, **separately for every operator (gin, pna, gat,
+transformer) and for config 2 (mp base / readout base) and config 4 (mp full / readout full)**: 8 independent tunings,
+each with its own frozen recipe, best epoch and threshold (`Outputs/TUNING_LUO/<FAMILY>/<run>/recipe.json`), then a
+5-seed retrain on train + val (`Outputs/FINAL_LUO/`). Rules, search space, additions and deviations: `EXPERIMENTS.md`
+§2b. In short: random search, 100 trials × 2 seeds (42, 43) per pair, trial 0 = the v1 knobs; Adam at a constant LR,
+100 epochs, no early stopping; best epoch = argmax of the seed-mean val PR-AUC; winner = highest mean val PR-AUC
+(tie-break val F1); F1 stays the headline metric. Hidden size {64, 128, 256, 512}, depth 1–10 (minus what does not fit
+in GPU memory), normalisation, residual {linear, none}, dropout, LR, weight decay, pos_weight, readout layers and width
+are all tuned, so **hidden and depth now vary**:
+- the "invariant params identical across configs" check no longer applies between configs 2 and 4 — `params` and
+  `invariant_params` are still recorded for every run (and are identical across the seeds of one recipe);
+- **configs 2 and 4 are each compared at their own tuned recipe, so a difference between them mixes the feature effect
+  with the recipe.** The fixed-architecture comparison of the v1 grid (the table below) is unchanged.
+The earlier GIN / GATv2 tuning (`Outputs/TUNING/GIN`, `Outputs/TUNING/GAT`) and the GIN final retrain
+(`Outputs/FINAL/GIN`) are **SUPERSEDED**: kept as they are, not continued. The tuning runs on Cineca (Leonardo
+Booster), run by Loris from `cineca/` (§7); Sandro has no Cineca access.
+
+**Status (19 Oct 2026, SUPERSEDED on 22 Oct):** the table below is the **v1 recipe**, fixed a priori for every finished run.
 After the 13 Oct meeting the recipe is tuned **once per operator** on config 2 (base / base) and then
 frozen; it is never tuned per feature config (`EXPERIMENTS.md` §2b holds the pre-registered rules and
 the stage tracker). **GIN is tuned and frozen (19 Oct): `Outputs/TUNING/GIN/recipe.json` = v1 with
@@ -118,6 +136,8 @@ operators is a change to the fixed architecture — stop and say so.
 `READOUT_EDGE_FEATS` (base | full | gfp) · `NODE_ENC` (none | rwpe8 | rwpe16 | node2vec) ·
 `GFP_VARIANT` (v0 | tuned) · `MP_DIRECTION` (in | bidirectional) ·
 `TEMPORAL_SAMPLING` (on | off). Adding features changes **only input-projection widths**.
+Exception, decided 22 Oct 2026: the Luo tuning above tunes the recipe knobs per (operator, config) — that is the
+approved protocol of `EXPERIMENTS.md` §2b, not a licence for other changes; anything outside it still needs my OK.
 
 If I ask for something that would change dims, depth, hyperparameters, or protocol — even
 "just to see" — **stop and tell me it breaks the fixed-architecture rule** before writing code.
@@ -183,6 +203,8 @@ them here. Rules that apply when implementing:
 
 - Threshold swept on **validation** each epoch (best-F1 point); keep the **best-val-F1 checkpoint**
   and **save that threshold** — it is part of the result, not a detail.
+  Luo tuning (22 Oct): the epoch is chosen on the seed-mean **val PR-AUC** (`select_metric='pr_auc'`), the threshold is
+  still the val-F1 sweep at that epoch (mean of the two tuning seeds), and F1 stays the headline metric.
 - **Test is scored exactly once** per run, with the validation-chosen checkpoint and threshold.
   No decision of any kind is ever made on test.
 - **Every metric is computed on all three splits — train, val, test** — using the *same*
@@ -284,6 +306,13 @@ with `results.json` (plus `phase`, `stop_epoch`, `frozen_threshold`, `val_seen`,
 precision / recall at the frozen threshold ± 0.05 / ± 0.10 and at 0.5), `predictions.csv` and `final.pt`
 (the last two not versioned); summaries `batch_summary_retrain.csv`, `seed_summary_retrain.csv`. Run names
 keep the convention above; the seed is the sub-folder.
+Luo tuning (22 Oct, `EXPERIMENTS.md` §2b; written on Cineca, unpacked from Loris's archives): `Outputs/TUNING_LUO/`
+holds `trials_space.json` (the pre-registered trial list), `logs/` (job logs, `aggregate_checks.txt`) and per family
+`probe.json`; per (family, run) `trials/t<id>/` with `trial.json` (seed-mean and per-seed metrics at the best epoch),
+`curves.png` (seed means) and `seed-<s>/` (`history.csv`, `curves.png`, `done.json`, `best.pt` = the checkpoint of the
+trial's best epoch, not versioned), plus `trials_summary.csv`, `tuning_curves.png` and **`recipe.json`** (the winner).
+Final retrain: `Outputs/FINAL_LUO/<FAMILY>/<run>/seed-<s>/` with the files of the retrain above, `results.json` written
+last (`final.pt`, `predictions.csv` not versioned); summaries `batch_summary_final.csv`, `seed_summary_final.csv` per run.
 `results/` holds only the archived hidden-64 reference of Run 1 (superseded; keep it).
 
 After a run finishes: mark its row ✅ in `EXPERIMENTS.md` with the `Outputs/` pointer (no
@@ -340,11 +369,21 @@ mirror both to their Notion pages. Mark superseded rows `SUPERSEDED`, never dele
   outputs show is already in `Outputs/TUNING/<FAMILY>/` (`history.csv`, `trial.json`, `curves.png`,
   `stage_summary.csv`, `probe.json`) and `Outputs/FINAL/<FAMILY>/`; the operator notebooks keep their
   outputs as before.
+  Sixth exception (22 Oct 2026): the Luo tuning is **not a notebook**. `cineca/` holds plain Python + bash + SLURM
+  scripts (`probe.py`, `draw_trials.py`, `tune.py`, `aggregate.py`, `final.py`, `*.sbatch`, `run_step.sh`,
+  `status.sh`, `pack_results.sh`, `setup_env.sh`, `requirements.lock`, one `config.sh` that Loris edits,
+  `README_LORIS.md`) that import `gnn_core.py` and are run by Loris on Cineca (Leonardo Booster); results come back as
+  `results_small.tar.gz` / `results_predictions.tar.gz` / `results_models.tar`, unpacked into `Outputs/` and committed
+  as usual. `make_handoff.sh` / `make_env_pack.sh` build the archives for Loris on my laptop (outside the repo). The
+  correctness checks live inside `aggregate.py` (asserts), not in a separate test file. Local verification of
+  `cineca/` runs the scripts from a scratch copy with a fake `config.sh` and fake `sbatch`/`squeue`/`sacct`.
 - **`recipe=None` reproduces v1.** Every `gnn_core.py` entry point takes an optional recipe dict
   (`full_recipe`, `DEFAULT = the module constants`). After any change to `gnn_core.py`, the regression
   check is part of the local verification: `run_experiment(recipe=None)` on the smoke slice with the
   previous file and the new one in the same process must give the same `history.csv` values and
-  `best.pt` tensors, and a v1 `best.pt` must still load with `strict=True`.
+  `best.pt` tensors, and a v1 `best.pt` must still load with `strict=True`. The knobs added on 22 Oct
+  (`residual` identity | linear | none, `readout_layers`, `readout_width`, `lr_schedule` cosine | constant,
+  `num_workers`, `select_metric` f1 | pr_auc) default to the v1 behaviour (identity, 2, 1.0, cosine, 0, f1).
 - **Kaggle environment cell — keep verbatim in every operator notebook.** The pinned
   PyTorch / PyG stack below is known to work on Kaggle GPU; do not "simplify", reorder, or
   change versions without my OK (a mismatched torch / torch-scatter build is the usual cause of
@@ -358,7 +397,8 @@ mirror both to their Notion pages. Mark superseded rows `SUPERSEDED`, never dele
   Then the repo clone/pull + `sys.path.append`. If a new operator needs an extra package
   (e.g. `pyg-lib` for temporal sampling), add it as a separate line after these, not inside.
 - Data-prep notebooks use the `graph_feature_preprocessor` kernel; EDA uses plain Python.
-- **Claude Code cannot run training.** All notebooks execute on **Kaggle GPU**, by me. The loop is:
+- **Claude Code cannot run training.** All notebooks execute on **Kaggle GPU**, by me (the Luo tuning of §3: on
+  **Cineca**, by Loris, from `cineca/`). The loop is:
   1. Claude Code edits the notebook locally (plan → my OK → edit).
   2. I commit + push; I upload/run the notebook on Kaggle.
   3. I commit + push the Kaggle results (`Outputs/<FAMILY>/<run>/results.json`, `history.csv`,
