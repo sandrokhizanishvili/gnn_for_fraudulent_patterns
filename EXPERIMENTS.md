@@ -57,6 +57,11 @@ Mirrored on the Notion experiments page (kept in sync).
       Cineca (Leonardo Booster) by Loris from `cineca/`. Rules and tracker in section 2b, retrain rows in section 3b.
       Package checked locally on the slice (22 Oct) and sent to Loris (23 Oct); next: check → probe → draw → early
       check-in on trials 0–9
+- [ ] **MLP cross-check** — a plain neural net on the same 93 inputs as the GBT (20 baseline + 61 GFP V0
+      + 6 + 6 entity one-hots), no message passing: one random search (100 unique trials, one seed each; shapes flat /
+      funnel / resnet; every fit stopped on validation PR-AUC) on the train rows, scored on validation, then 4 seeds;
+      Kaggle GPU (`MLP_fixed_features.ipynb`, `mlp_core.py`, section 3 "MLP cross-check runs"). Next: Sandro runs it on
+      Kaggle → results → `Progress_Report.md` §7.13
 
 ---
 
@@ -104,6 +109,8 @@ dropout 0.3, identical training recipe — so only the aggregation rule differs.
       `TRANSFORMER_fixed_architecture.ipynb` · 7 runs
 - [x] **No message passing — LightGBM** on the same features (hand-crafted graph features vs
       message passing) · `GBT_fixed_features.ipynb` · 1 search + 4 seeds (section 3, "GBT cross-check runs")
+- [ ] **No message passing — MLP** on the same features (is the GNN gain over the trees message passing,
+      or just a neural net?) · `MLP_fixed_features.ipynb` · 1 search + 4 seeds (section 3, "MLP cross-check runs")
 
 **Two extra questions about message passing itself (optional)**
 
@@ -396,10 +403,47 @@ paper's GFP + LightGBM (62.86 ± 0.25) is a reference point, not a target: diffe
 simple cycles ≤ 6 vs 10, truncated test window, validation-chosen threshold vs 0.5 (F1 at 0.5 is
 stored alongside), x0 = 100 vs 1000 with a narrower search space, LightGBM 4.6 vs 3.1.1.
 
+### MLP cross-check runs — a plain neural net on the GBT inputs (`MLP_fixed_features.ipynb`, Kaggle GPU)
+
+*An MLP on the same 93 inputs as the GBT — the 81 edge features (20 baseline + 61 GFP V0) plus the 6 + 6
+entity one-hots of the two endpoints — on the same positional 60/20/20 split and the same protocol. It is
+the GNN readout's own input `[e_seed ‖ x_src ‖ x_dst]` without the learned node states, so against the GBT
+block it separates "message passing" from "a neural net": an MLP level with LightGBM means the PNA /
+Transformer gain is message passing; an MLP level with them means the gain was the net. The 81 edge
+columns are standardised with the train-row mean / std (std floor 1e-3); the one-hots stay 0/1 — the
+only input treatment the trees did not need. Every fit (search trial or final seed) runs
+Adam at a constant learning rate for at most 60 epochs and stops after 10 epochs without a better
+**validation PR-AUC**, keeping that epoch; the threshold is swept on validation there. The recipe is chosen
+once by random search: 100 unique trials, trial 0 = the a-priori pick (funnel 93 → 512 → 256 → 128 → 1,
+BatchNorm, dropout 0.2, learning rate 1e-3, weight decay 1e-4, pos_weight 8, batch 8,192), each trained once
+(seed 42) on the train rows, scored on validation, ranked by validation PR-AUC (tie-break validation
+F1); then frozen for the four seeds. Search space: shape {flat, funnel, resnet} ×
+first width {128, 256, 512, 1024} × depth {2, 3, 4, 5} × normalisation {none, batch} × dropout {0.1, 0.2,
+0.3, 0.5} × learning rate {3e-4, 1e-3, 3e-3} × weight decay {0, 1e-5, 1e-4, 1e-3} × pos_weight {4, 8, 16} ×
+batch {2,048, 8,192}. Test is never used until the four final models are scored. Runs land in
+`Outputs/MLP/<run>/`, the search log in `Outputs/MLP/search/`, the summaries in
+`Outputs/MLP/batch_summary_mlp.csv` and `seed_summary_mlp.csv`.*
+
+- [ ] **MLP search** · random search, 100 trials, one seed each, on the train rows, ranked by validation PR-AUC → `Outputs/MLP/search/best_params.json` + `trials.csv`
+- [ ] **MLP-42** · all 93 features · seed 42 → `Outputs/MLP/mlp_readout-full_seed-42/` — the run compared with the single-seed GNN runs
+- [ ] **MLP-43** · all 93 features · seed 43 → `Outputs/MLP/mlp_readout-full_seed-43/`
+- [ ] **MLP-44** · all 93 features · seed 44 → `Outputs/MLP/mlp_readout-full_seed-44/`
+- [ ] **MLP-45** · all 93 features · seed 45 → `Outputs/MLP/mlp_readout-full_seed-45/`
+
+**Decision rule, fixed in advance:** the four seeds give mean ± std; the MLP is set against the GBT (four
+seeds), the best run of every family and configs 3 / 7 (GFP at the readout, nothing in message passing).
+Only test F1 and PR-AUC are fair scores for the MLP: validation is used three times (hyperparameters, kept
+epoch, threshold), so its scores are optimistic; validation is shown for the overfitting check only. A gap
+inside the 4-seed spread is a tie. The train / validation gap is reported from the curves; if it does not
+close, that is stated, not hidden by picking a different epoch. The search may span Kaggle sessions:
+`Outputs/MLP/search/trials.csv` is committed in between and the logged fits are skipped on the next run.
+
 ### Cross-checks (optional)
 
 - [x] **Gradient-boosted trees** on the same features, no message passing — does message passing add
       anything beyond engineered features? → planned as the "GBT cross-check runs" block above
+- [ ] **A plain neural net** on the same features, no message passing — is the GNN gain over the trees the
+      net or the message passing? → planned as the "MLP cross-check runs" block above
 - [ ] **Seeds** — 3–4 random seeds on the winning runs, mean ± std; differences inside the seed
       spread count as ties → covered by the tuned-recipe runs of section 3b (4 seeds)
 
@@ -477,6 +521,15 @@ Same decision rule as for GIN: nothing is chosen on test; configs 4, 5 and 6 reu
 
 *Newest first. Unticked = in progress · ticked = finished and synced.*
 
+- [ ] **23 Oct** — MLP cross-check planned and coded: `mlp_core.py` (train-row scaling of the edge columns, the
+      three shapes flat / funnel / resnet in one `MLP` class, one training loop with early stopping on validation
+      PR-AUC, the resumable random search, the final seeds; matrix and predictions file from `gbt_core`, metrics /
+      curves / summaries from `gnn_core`) and `MLP_fixed_features.ipynb` (Kaggle GPU, committed without outputs
+      until run); block in section 3, space and row conventions in the appendix, §5.6 in `Progress_Report.md`.
+      Smoke test on a slice of the real matrix (150 k train / 60 k val / 60 k test rows, CPU): 3 search fits with
+      resume, one run per shape, 2 final seeds, both summaries, finished seed skipped on rerun — passed; the
+      scratch outputs were deleted. Next: Sandro runs the notebook on Kaggle (the search may need more than one
+      session: commit `Outputs/MLP/search/trials.csv` in between) → results → `Progress_Report.md` §7.13
 - [ ] **22 Oct** — Luo et al. (2024) re-tuning decided and packaged for Cineca (Loris runs it; Sandro has no access):
       every operator × configs 2 and 4, random search of 100 trials × 2 seeds over the paper's space plus our additions,
       constant LR, 100 epochs without early stopping, best epoch and winner on the seed-mean val PR-AUC, 5-seed retrain on
@@ -680,6 +733,36 @@ normalisation, entity one-hots; self-checked on the 10 Sep rows (baseline exact,
 within 1 %) — and the four `best.txt` boosters are scored at their validation thresholds and at 0.5 on four
 windows (our test = must reproduce `results.json`; our test + tail; the paper code's 9–18 Sep window; the
 tail alone) → `Outputs/GBT/tail_check.csv`. Nothing is chosen on these numbers; they size the window effect.
+
+**MLP cross-check** (`mlp_core.py`, `MLP_fixed_features.ipynb`; Kaggle GPU): the GBT matrix of
+`gbt_core.load_gbt_data` (93 columns, same rows, same asserted counts), then `mlp_core.standardise`: columns
+0–80 (the edge features) get `(value − train mean) / train std` (std floored at 1e-3, no clipping: the
+check on the full train rows showed a ±10 clip would merge the highest bank-risk values and the pattern-bin
+counts, the informative rows); columns 81–92 (the entity one-hots) stay 0/1; the whole matrix is moved to the GPU once (1.76 GB). Model
+(`mlp_core.MLP`): flat = `[Linear → Norm → ReLU → Dropout]` per hidden layer, every layer `hidden` wide;
+funnel = the same blocks with the width halving per layer (`hidden`, `hidden/2`, …, floor 16); resnet =
+`Linear 93 → hidden`, then `depth` blocks `z + Linear(Dropout(ReLU(Norm(Linear(z)))))` (the tabular ResNet of
+Gorishniy et al. 2021), both Linears `hidden → hidden`; every shape ends in `Linear → 1`; `norm` = batch
+(`BatchNorm1d`) or none. Trial 0 = funnel, first width 512, depth 3, batch norm, dropout 0.2, learning rate
+1e-3, weight decay 1e-4, pos_weight 8, batch 8,192 (≈ 214 k parameters). Draw (`draw_trials`): trials 1–99
+uniform over `SEARCH_SPACE` with `numpy.random.default_rng(42)`, a draw equal to an earlier trial is redrawn,
+all 100 settings unique → `Outputs/MLP/search/configs.json`. Training (`train_run`): `set_seed(seed)`, seeded
+shuffle of the train rows every epoch, Adam (`lr`, `weight_decay`), `BCEWithLogitsLoss(pos_weight)`, no
+schedule; after every epoch train and val are scored (`history.csv` columns as the GNN runs: `train_loss` /
+`val_loss` = `gnn_core.weighted_bce` at weight 8 whatever the trial's `pos_weight`, `train_f1` at the val
+threshold, PR-AUC, ROC-AUC, `threshold`, `seconds`, plus `train_loss_batches` = the mini-batch loss at the
+trial's weight and `lr`); the state of the best `val_pr_auc` epoch is kept and reloaded at the end; a run
+stops after 10 epochs without improvement (cap 60). Search log `trials.csv`, one row per (trial, seed):
+`trial, seed, shape, widths, params, best_epoch, epochs_trained, val_pr_auc, val_f1, threshold,
+sec_per_epoch, seconds, knobs`; winner = highest `val_pr_auc` (tie-break `val_f1`, then the lower id; `SEARCH_SEEDS = (42,)`, one
+fit per trial) → `best_params.json`. Finals: one `train_run` per
+seed on the train rows, test scored once at the kept epoch. Row columns as in every `batch_summary.csv`:
+`operator = mlp`, `mp = none`, `readout = full`, `mp_direction = none`, `node_enc = none`, `gfp_variant = v0`,
+`seed`, `params` = `count_params`, `invariant_params = 0`. Run name `mlp_readout-full_seed-<seed>`;
+`results.json` also holds `hyperparams` (the knobs, the widths, epochs, patience, select) and
+`paper_comparison` (F1 at 0.5). `best.pt` and `predictions.csv` stay out of git. The notebook keeps
+`OUT_ROOT` inside the Kaggle repo clone, so committed search fits and finished seeds are skipped on the next
+session.
 
 **Recipe tuning** (section 2b; `gnn_core.py`, `GIN_tuning.ipynb`, `GIN_tuning_final.ipynb`):
 - *Recipe dict.* `DEFAULT_RECIPE` = the v1 constants (hidden 128, 2 layers, dropout 0.3, norm none, FFN off,

@@ -25,6 +25,7 @@ Full write-up of the work so far: **[Progress_Report.md](Progress_Report.md)**.
 | `GIN_tuning_final.ipynb` | Kaggle (GPU) | *Superseded on 22 Oct 2026 (13 of 16 runs done).* Retrains the frozen GIN recipe on the train + val graph (built in memory) for the frozen number of epochs on configs 2, 4, 5 and 6 (edge features in message passing), seeds 42–45 each, one validation-chosen threshold per config (selection run on the train graph; `Outputs/TUNING/GIN/config_thresholds.json`), test scored once per run, mean ± std over the four seeds per config and threshold-sensitivity tables → `Outputs/FINAL/GIN/retrain/`; resumable |
 | `GAT_tuning.ipynb` / `GAT_tuning_final.ipynb` | Kaggle (GPU) | *Superseded on 22 Oct 2026 (the retrain never ran).* The same two notebooks for the GATv2 family (only `OPERATOR` and the paths differ): tuning on GAT config 2 (one seed per trial, an extra self-loop stage) froze `Outputs/TUNING/GAT/recipe.json` on 21 Oct 2026 = the v1 recipe unchanged, best epoch 44; then the final retrain of configs 2, 4, 5 and 6 → `Outputs/FINAL/GAT/retrain/` |
 | `GBT_fixed_features.ipynb` | `graph_feature_preprocessor` (CPU, local) | GBT cross-check: LightGBM on the same 93 inputs the GNNs see (81 edge features + the 6 + 6 entity one-hots of both endpoints), no message passing — hand-crafted graph features vs learned ones. One successive-halving search (x0 = 100, train rows only, scored on validation, ranked by validation PR-AUC) over small, strongly regularised trees, every fit stopped on the weighted validation loss (patience 100), then four seeds under the thesis protocol; results in `Outputs/GBT/`, search log in `Outputs/GBT/search/`, summaries `batch_summary_gbt.csv` and `seed_summary_gbt.csv`; verdict in `Progress_Report.md` §7.7. Ends with a clearly labelled appendix outside the protocol: the boosters scored on the test window including the removed tail days (`tail_check.csv`) |
+| `MLP_fixed_features.ipynb` | Kaggle (GPU) | MLP cross-check: a plain neural net on the same 93 inputs as the GBT (edge columns standardised on the train rows, one-hots untouched), no message passing — the GNN readout's input without the learned node states, so it tells message passing from "a neural net" in the GBT comparison. One random search (100 unique trials, one seed each, over three shapes flat / funnel / resnet, widths, depth, normalisation, dropout, learning rate, weight decay, `pos_weight`, batch size; every fit stopped on validation PR-AUC, trials ranked by validation PR-AUC), then four seeds under the thesis protocol; results in `Outputs/MLP/`, search log in `Outputs/MLP/search/`, summaries `batch_summary_mlp.csv` and `seed_summary_mlp.csv`; resumable across Kaggle sessions when the search log is committed in between; verdict in `Progress_Report.md` §7.13 |
 
 `gnn_core.py` — everything shared by the operator notebooks: the fixed model template,
 `build_model(operator, …)`, loaders, the training loop with validation threshold sweep, metrics on
@@ -49,6 +50,13 @@ SLURM): plain Python + bash, one `config.sh` to edit, `run_step.sh <check|probe|
 runs the successive-halving search (resumable `trials.csv`; every fit stops on the weighted validation
 loss), trains the final seeds with validation checkpoints every 25 boosting rounds and writes the same result files as the GNN runs. Threshold sweep,
 metrics, loss diagnostic, curves and batch summary are imported from `gnn_core.py`, never copied.
+
+`mlp_core.py` — the MLP cross-check next to the GBT: scales the GBT matrix (train-row mean / std on the 81
+edge columns), defines the three shapes (flat, funnel, resnet) in one `MLP` class, trains
+with Adam at a constant learning rate and early stopping on validation PR-AUC, runs the resumable random
+search (`trials.csv`) and the final seeds, and writes the same result files as the GNN runs. The matrix and
+the predictions file come from `gbt_core.py`; threshold sweep, metrics, loss diagnostic, curves and summaries
+from `gnn_core.py` — never copied.
 
 `rwpe_compute.py` — exact RWPE of one snapshot on CPU (scipy; P = D_out⁻¹ A without self-loops,
 step k = diag(Pᵏ), same maths as PyG `AddRandomWalkPE`), logging non-zeros, seconds and RAM per step.

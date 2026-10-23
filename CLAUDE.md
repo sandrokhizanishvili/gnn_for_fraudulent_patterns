@@ -198,6 +198,16 @@ them here. Rules that apply when implementing:
   hyperparameters, kept round and threshold); say so wherever the GBT is compared. A first, wider
   search without early stopping memorised the train rows and was removed on 20 Oct together with its
   `GBT_VARIANT` knob; a new variant needs a new decision, not a knob.
+- **MLP cross-check:** a plain neural net on the GBT's 93 inputs, no message passing — the
+  readout's input without the learned node states, so it tells "message passing" from "a neural net" in the
+  GBT comparison. Recipe chosen **once** by random search (100 unique trials, one seed each; trial 0 = the
+  a-priori funnel 93 → 512 → 256 → 128 → 1; shapes flat / funnel / resnet; every fit stops on validation
+  PR-AUC, patience 10, cap 60 epochs) and frozen for seeds 42–45. Edge columns standardised on the train rows
+  (std floor 1e-3, no clipping), one-hots untouched. Code in `mlp_core.py` (matrix and predictions file from
+  `gbt_core.py`, metrics / curves / summaries from `gnn_core.py`, never copied); notebook
+  `MLP_fixed_features.ipynb` runs on **Kaggle GPU** with `OUT_ROOT` inside the repo clone (logged search
+  fits and finished seeds are skipped, so the search may span sessions). Only test F1 and PR-AUC are fair
+  scores; say so wherever the MLP is compared. Space and conventions: `EXPERIMENTS.md` appendix.
 
 ## 4. Evaluation protocol — never deviate
 
@@ -291,6 +301,11 @@ scored boosting round (`epoch` = round); the result row keeps every `batch_summa
 Search log: `Outputs/GBT/search/`; summaries `Outputs/GBT/batch_summary_gbt.csv` and
 `seed_summary_gbt.csv`; `Outputs/GBT/tail_check.csv` = the side check of the notebook appendix (boosters scored
 on the test window including the removed tail days) — outside the protocol, never used to choose or compare.
+MLP cross-check runs: `Outputs/MLP/mlp_readout-full_seed-<seed>/` with the GNN files (`best.pt` = the state dict,
+gitignored); `history.csv` has one row per epoch; the result row keeps every `batch_summary.csv` column with
+`operator = mlp`, `mp = none`, `mp_direction = none`, `params` = parameter count, `invariant_params = 0`;
+`results.json` adds `hyperparams` and `paper_comparison`. Search log: `Outputs/MLP/search/` (`configs.json`,
+`trials.csv`, `best_params.json`); summaries `Outputs/MLP/batch_summary_mlp.csv` and `seed_summary_mlp.csv`.
 Recipe-tuning runs (`EXPERIMENTS.md` §2b): `Outputs/TUNING/<FAMILY>/s<k>_<knob>/<trial>/` holds `trial.json`
 (the trial's scoring: knobs, seed-mean best epoch, per-seed thresholds, train / val metrics mean ± std, the
 gap) and `seed-<s>/history.csv`, `curves.png`; per stage `stage_summary.csv`; per family
@@ -350,7 +365,9 @@ mirror both to their Notion pages. Mark superseded rows `SUPERSEDED`, never dele
   passing (§3b). It keeps the section skeleton (environment, configuration, load, search, runs,
   comparison) but imports `gbt_core.py`, has no Kaggle cells and runs locally on CPU in the
   `graph_feature_preprocessor` env (Claude Code may run it in the background via nbconvert; it is
-  resumable: logged search trials and finished runs are skipped on rerun).
+  resumable: logged search trials and finished runs are skipped on rerun). `MLP_fixed_features.ipynb` is
+  its neural twin: the same skeleton, imports `mlp_core.py`, runs on Kaggle GPU with the standard
+  environment cells (plus a `lightgbm` install line, because `gbt_core` imports it), resumable the same way.
   Fifth exception: the recipe-tuning pair `<OP>_tuning.ipynb` / `<OP>_tuning_final.ipynb` (GIN first;
   one pair per operator as it is tuned, same cells, only the knobs cell differs). The tuning notebook
   sets `OPERATOR`, `CFG` (config 2), `STAGES`, `SEEDS`, `TUNE` and runs the pre-registered stages through

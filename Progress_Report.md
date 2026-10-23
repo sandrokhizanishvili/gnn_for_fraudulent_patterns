@@ -306,6 +306,32 @@ message-passing box differs. The table lists what is fixed and the knobs that ma
   the Kaggle loop); artifacts in `Outputs/GBT/`.
 - **Status: done → §7.7.**
 
+### 5.6 MLP — the second no-message-passing cross-check
+
+- Rule: **no message passing**, a plain neural net. One row per transaction with the same 93 columns as
+  the trees (§5.5): the 81 edge columns plus the 6 + 6 entity one-hots — exactly what the GNN readout
+  sees, minus the learned node states `h_src`, `h_dst`. Against §7.7 it separates "message passing" from
+  "a neural net": an MLP level with LightGBM means the PNA / Transformer gain is message passing; an MLP
+  level with them means the gain was the net.
+- Inputs: the 81 edge columns standardised with the train-row mean / std (floor 1e-3; trees do not
+  need this, a net does); the one-hots stay 0/1.
+- Same split and protocol (§4, §6): fit on the train rows, Adam at a constant learning rate, at most 60
+  epochs; every fit stops after 10 epochs without a better validation PR-AUC and keeps that epoch, the
+  threshold is swept on validation there, test is scored once, every metric on every split,
+  `predictions.csv` for every edge.
+- Recipe chosen **once** by random search: 100 unique settings (trial 0 = the a-priori pick, a funnel
+  93 → 512 → 256 → 128 → 1 with BatchNorm and dropout 0.2), each trained once (seed 42), ranked by
+  validation PR-AUC, then frozen for seeds 42–45. Space: three shapes (flat = equal widths;
+  funnel = widths halving per layer; resnet = residual blocks of two Linears), first width 128–1,024, 2–5
+  layers, BatchNorm or none, dropout 0.1–0.5, learning rate 3e-4–3e-3, weight decay 0–1e-3, `pos_weight`
+  4–16, batch 2,048 or 8,192.
+- Fairness: validation picks the hyperparameters, the epoch and the threshold, so **only test F1 and
+  PR-AUC are fair scores**; the paper's threshold-0.5 F1 is stored alongside.
+- Code `mlp_core.py` (matrix and predictions file from `gbt_core.py`; threshold sweep, metrics, loss
+  diagnostic, curves and summaries from `gnn_core.py`), notebook `MLP_fixed_features.ipynb` on Kaggle
+  GPU; artifacts in `Outputs/MLP/`.
+- **Status: ⬜ notebook ready → §7.13 after the Kaggle run.**
+
 ## 6 · Evaluation protocol
 
 - **Threshold:** swept on validation each epoch (best-F1 point); the best-val-F1 checkpoint and
@@ -1623,6 +1649,8 @@ The GATv2 family was tuned with the procedure of §7.9 on GAT config 2 (base / b
 | `Outputs/<FAMILY>/<run>/` (GIN, GAT, PNA, TRANSFORMER) | results.json (all splits, all metrics), history.csv, curves.png, best.pt, predictions.csv (the last two not versioned) • batch_summary.csv per batch |
 | `Outputs/RWPE/<FAMILY>/<run>/` | the same files for the node-encoding runs (§7.5) • batch_summary_rwpe.csv per family |
 | `Outputs/GFP_TUNED/<FAMILY>/<run>/` | the same files for the data-tuned GFP runs (§7.6) • batch_summary_gfp_tuned.csv per family |
+| `MLP_fixed_features.ipynb` / `mlp_core.py` | the MLP cross-check of §5.6: a plain neural net on the same 93 inputs, no message passing; `mlp_core.py` scales the GBT matrix, defines the three shapes, trains with early stopping on validation PR-AUC, runs the resumable random search and the final seeds, and imports the matrix from `gbt_core.py` and the metrics / curves / summaries from `gnn_core.py` |
+| `Outputs/MLP/<run>/` | (pending) the same files for the four MLP seeds of §5.6 (`best.pt` = the state dict, not versioned) • `search/` (`configs.json`, `trials.csv`, `best_params.json`) • `batch_summary_mlp.csv`, `seed_summary_mlp.csv` |
 | `Outputs/GBT/<run>/` | the same files for the four LightGBM seeds of §7.7 (`best.txt` = the booster, not versioned) • `search/` (`configs.json`, `trials.csv`, `best_params.json`) • `batch_summary_gbt.csv`, `seed_summary_gbt.csv` • `tail_check.csv` (the side check of the notebook appendix: one row per seed × window, outside the protocol) |
 | `Data/gfp_variants/` (not versioned) | `tuned.npy` (float32 [5,077,237, 64]) + `tuned_cols.json`, rows aligned with `edge_features.csv`; uploaded to Kaggle as the dataset `hi-small-gfp-tuned` |
 | `Data/rwpe/` (not versioned) | `rwpe_k{8,16}_{train,val,test}.pt` (float32 [515,070, k]) + per-step logs; uploaded to Kaggle as the dataset `hi-small-rwpe` |
