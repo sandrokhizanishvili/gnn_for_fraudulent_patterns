@@ -330,7 +330,7 @@ message-passing box differs. The table lists what is fixed and the knobs that ma
 - Code `mlp_core.py` (matrix and predictions file from `gbt_core.py`; threshold sweep, metrics, loss
   diagnostic, curves and summaries from `gnn_core.py`), notebook `MLP_fixed_features.ipynb` on Kaggle
   GPU; artifacts in `Outputs/MLP/`.
-- **Status: ⬜ notebook ready → §7.13 after the Kaggle run.**
+- **Status: done → §7.13.**
 
 ## 6 · Evaluation protocol
 
@@ -1493,6 +1493,7 @@ Seed 42, all metrics, all splits (`Outputs/GBT/lightgbm_readout-full_seed-42/`; 
 | Model | Edge features in MP | Readout | F1 val | F1 test | Precision test | Recall test | PR-AUC test | Recall@5 % test |
 |---|---|---|---|---|---|---|---|---|
 | **LightGBM, 4 seeds** | — (no message passing) | base+GFP + entity types | 0.588 ± 0.002 | **0.520 ± 0.008** | 0.653 | 0.433 | 0.483 | 0.869 |
+| MLP, 4 seeds (§7.13) | — (no message passing) | base+GFP + entity types | 0.539 ± 0.004 | 0.489 ± 0.006 | 0.647 | 0.395 | 0.419 | 0.841 |
 | GIN-5 — best GIN | base | base+GFP | 0.609 | 0.525 | 0.678 | 0.429 | 0.484 | 0.867 |
 | GAT-4 — best GATv2 | base+GFP | base+GFP | 0.570 | 0.488 | 0.611 | 0.406 | 0.458 | 0.841 |
 | PNA-2 — best PNA | base | base | 0.651 | **0.614** | 0.776 | 0.507 | 0.578 | 0.881 |
@@ -1622,6 +1623,74 @@ The GATv2 family was tuned with the procedure of §7.9 on GAT config 2 (base / b
 
 *Pending: configs 2, 4, 5 and 6, seeds 42–45 each, 44 epochs on the train + val graph, one validation-chosen threshold per config from a selection run (the tuning threshold 0.483 as the transfer view), test scored once per run; test PR-AUC and F1 as mean ± std, threshold-sensitivity tables, validation reported as "seen". Estimated ≈ 28 GPU hours (selection runs ≈ 4 h, 2-layer retrain runs ≈ 75 min each, config 4 ≈ 130 min each), resumable over sessions. Results → `Outputs/FINAL/GAT/retrain/`.*
 
+### 7.13 MLP cross-check — a plain neural net on the GNN inputs, no message passing (search + 4 seeds)
+
+The second no-message-passing model of §5.6: an MLP on exactly the 93 columns the trees of §7.7 see (81 edge columns plus the 6 + 6 entity one-hots; for the net the 81 edge columns are standardised on the train rows), the GNN readout's own input without the learned node states. Same split, same protocol: fit on the train rows, every fit stops after 10 epochs without a better validation PR-AUC and keeps that epoch, the threshold is swept on validation there, test is scored once, every metric on every split. The recipe was chosen once by random search (100 unique settings, one seed each, ranked by validation PR-AUC) and frozen for seeds 42–45. All of it ran in one Kaggle T4 session (`MLP_fixed_features.ipynb`, outputs in `Outputs/MLP/`).
+
+**Search — 100 random settings, one seed each, early stopping on validation PR-AUC**
+
+| Shape | Trials | Best val PR-AUC | Median val PR-AUC | Worst | GPU time |
+|---|---|---|---|---|---|
+| flat (equal widths) | 33 | **0.473** | 0.433 | 0.254 | 2.9 h |
+| funnel (widths halving) | 39 | 0.466 | 0.430 | 0.206 | 1.7 h |
+| resnet (residual blocks) | 28 | 0.457 | 0.414 | 0.001 | 4.5 h |
+
+| Trial | Shape · widths | Params | Norm | Dropout | LR | Weight decay | pos_weight | Batch | Kept epoch (of trained) | Val PR-AUC | Val F1 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| **28 (winner)** | flat 93 → 512 → 512 → 512 → 512 → 1 | 840,705 | batch | 0.2 | 3e-3 | 0 | 4 | 2,048 | 12 (22) | **0.473** | 0.540 |
+| 22 | funnel 93 → 256 → 128 → 64 → 32 → 1 | 68,289 | batch | 0.2 | 3e-3 | 0 | 8 | 2,048 | 23 (33) | 0.466 | 0.539 |
+| 41 | flat 93 → 1024 × 5 → 1 | 4,305,921 | batch | 0.1 | 1e-3 | 1e-5 | 4 | 2,048 | 25 (35) | 0.464 | 0.540 |
+| 76 | flat 93 → 512 × 4 → 1 | 840,705 | batch | 0.5 | 3e-3 | 0 | 16 | 8,192 | 34 (44) | 0.458 | 0.534 |
+| 43 | flat 93 → 256 × 3 → 1 | 157,441 | batch | 0.5 | 3e-4 | 0 | 4 | 2,048 | 41 (51) | 0.457 | 0.534 |
+| 0 (the a-priori pick) | funnel 93 → 512 → 256 → 128 → 1 | 214,273 | batch | 0.2 | 1e-3 | 1e-4 | 8 | 8,192 | 20 (30) | 0.441 (rank 32) | 0.522 |
+
+- **The shape barely matters:** the best flat, funnel and resnet trials sit within 0.016 of each other, and a 68 k-parameter funnel is the runner-up to the 841 k winner. Width and depth show no trend either (best per width 0.457–0.473, per depth 0.453–0.473).
+- **What matters is regularisation and normalisation:** BatchNorm raises the median trial from 0.411 to 0.434; weight decay 1e-3 is the one clearly bad value (median 0.356 against 0.440–0.445 for 0 and 1e-5); the learning rate 3e-3 gives the best trial but the worst median (0.394), i.e. it is the unstable choice — the only two failed fits (validation PR-AUC below 0.1) are resnet trials without BatchNorm at 3e-3.
+- **Budget:** 100 fits, 9.0 GPU hours, 29 epochs per fit on average (2.4–72.5 s per epoch; the 1024-wide resnets take half of the time); 16 trials reach 0.45, three reach 0.46. The winner's seed-42 fit was reproduced exactly by the final seed-42 run below (same best epoch, same validation PR-AUC), so the search and the finals are consistent.
+
+**Final runs — four seeds, chosen setting, train rows, early stopping on validation PR-AUC**
+
+| Run | Kept epoch (of trained) | Threshold | F1 train | F1 val | F1 test | Precision test | Recall test | PR-AUC train | PR-AUC val | PR-AUC test | Recall@5 % test | F1 test at 0.5 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| seed 42 (`mlp_readout-full_seed-42`) | 12 (22) | 0.381 | 0.510 | 0.540 | **0.487** | 0.601 | 0.409 | 0.452 | 0.473 | 0.422 | 0.872 | 0.486 |
+| seed 43 | 13 (23) | 0.537 | 0.519 | 0.539 | 0.494 | 0.686 | 0.386 | 0.457 | 0.468 | 0.419 | 0.861 | 0.498 |
+| seed 44 | 25 (35) | 0.616 | 0.551 | 0.533 | 0.481 | 0.588 | 0.407 | 0.519 | 0.469 | 0.420 | 0.807 | 0.471 |
+| seed 45 | 18 (28) | 0.640 | 0.540 | 0.543 | 0.493 | 0.714 | 0.376 | 0.490 | 0.475 | 0.416 | 0.826 | 0.490 |
+| **mean ± std** | 17 ± 6 | 0.544 | 0.530 ± 0.019 | 0.539 ± 0.004 | **0.489 ± 0.006** | 0.647 ± 0.062 | 0.395 ± 0.016 | 0.479 ± 0.031 | 0.471 ± 0.003 | **0.419 ± 0.003** | 0.841 ± 0.030 | 0.486 ± 0.011 |
+
+Seed 42, all metrics, all splits (`Outputs/MLP/mlp_readout-full_seed-42/`; 840,705 parameters; 4–6.5 min per seed at 11 s per epoch):
+
+| Split | F1 | Precision | Recall | PR-AUC | ROC-AUC | Precision@5 % | Recall@5 % |
+|---|---|---|---|---|---|---|---|
+| train | 0.510 | 0.670 | 0.412 | 0.452 | 0.987 | 0.0136 | 0.899 |
+| val | 0.540 | 0.683 | 0.446 | 0.473 | 0.982 | 0.0187 | 0.875 |
+| test | **0.487** | 0.601 | 0.409 | 0.422 | 0.979 | 0.0196 | 0.872 |
+
+![MLP seed 42 — loss, F1, PR-AUC per epoch (dashed = kept epoch), test PR curve](Outputs/MLP/mlp_readout-full_seed-42/curves.png)
+
+- **Overfitting starts right after the kept epoch:** in every seed the train PR-AUC crosses above validation at epoch 14–15 and keeps rising (0.50–0.59 at the last epoch) while validation flattens at 0.45–0.47 and the validation loss drifts up; early stopping cut the seeds at epochs 22–35. The kept epochs (12–25) sit before the crossing, so the reported numbers are not inflated by it, but the net clearly has more capacity than the 93 columns can use.
+- **Seeds:** test F1 0.481–0.494 (± 0.006) and PR-AUC ± 0.003; the threshold moves between 0.38 and 0.64 and trades precision (0.59–0.71) against recall (0.38–0.41) without moving F1. The val → test drop (PR-AUC 0.471 → 0.419) is the usual one (GBT 0.548 → 0.483; GIN-5 0.549 → 0.484).
+- **Threshold-insensitive:** F1 at the paper's 0.5 (0.486 ± 0.011) equals F1 at the validation threshold, unlike the trees (0.504 vs 0.520).
+
+**Against the trees and the GNNs — same 93 inputs, same split, same protocol (test is the fair column; GNN rows are single seed)**
+
+| Model | Edge features in MP | Readout | F1 val | F1 test | Precision test | Recall test | PR-AUC test | Recall@5 % test |
+|---|---|---|---|---|---|---|---|---|
+| **MLP, 4 seeds** | — (no message passing) | base+GFP + entity types | 0.539 ± 0.004 | **0.489 ± 0.006** | 0.647 | 0.395 | 0.419 | 0.841 |
+| LightGBM, 4 seeds (§7.7) | — (no message passing) | base+GFP + entity types | 0.588 ± 0.002 | **0.520 ± 0.008** | 0.653 | 0.433 | 0.483 | 0.869 |
+| GIN-5 — best GIN | base | base+GFP | 0.609 | 0.525 | 0.678 | 0.429 | 0.484 | 0.867 |
+| GAT-4 — best GATv2 | base+GFP | base+GFP | 0.570 | 0.488 | 0.611 | 0.406 | 0.458 | 0.841 |
+| PNA-2 — best PNA | base | base | 0.651 | **0.614** | 0.776 | 0.507 | 0.578 | 0.881 |
+| TR-4 — best Transformer | base+GFP | base+GFP | 0.644 | **0.602** | 0.788 | 0.487 | 0.574 | 0.881 |
+| GIN-3 / GAT-3 / PNA-3 / TR-3 — GFP at the readout only | none | base+GFP | 0.511–0.574 | 0.448–0.512 | 0.535–0.680 | 0.374–0.410 | 0.411–0.472 | 0.853–0.865 |
+
+- **Verdict:** a plain net on the same inputs reaches test F1 0.489 ± 0.006 and PR-AUC 0.419 ± 0.003 — **below the trees** (0.520 / 0.483) by 0.03 F1 and 0.06 PR-AUC, four to twenty times the seed spread, and the weakest of the three model families on these inputs. It ties the best GATv2 run on F1 (0.488) with a lower PR-AUC, sits under the best GIN run (0.525 / 0.484), and is 0.11–0.13 F1 and 0.16 PR-AUC under PNA-2 and TR-4. So the lead of PNA and the Transformer over LightGBM in §7.7 is not "a neural net beats trees": with the same inputs and no message passing, the net loses to the trees. What those two operators add is message passing.
+- **Against the config-3 GNNs** (GFP at the readout, nothing but topology in message passing) the MLP is level: above GIN-3, GAT-3 and TR-3 (0.448–0.471) and below PNA-3 (0.512). Two layers of feature-less message passing give a GNN about what a tuned MLP gets from the same readout columns.
+- **Same shape of errors:** precision 0.65 and recall 0.39 at the validation threshold; recall@5 % 0.84 is at the lower end of the GNN / GBT band (0.84–0.88), the same ceiling.
+- **Caveats:** one seed per search trial (the top three are within 0.01, so the winner is one of several near-twins, not a sharp optimum); validation is used three times (hyperparameters, kept epoch, threshold), so the validation column is optimistic and only test is fair; the GNN rows are single-seed.
+- **Leakage check:** test ≤ validation in every seed on every metric; the scaling statistics come from the train rows only.
+- **Runtime (from the logs):** search 9.0 GPU hours for 100 fits; final seeds 4.0–6.4 min each at 11 s per epoch; one Kaggle T4 session for everything.
+
 ## 8 · Repository map
 
 | File | Content |
@@ -1649,8 +1718,8 @@ The GATv2 family was tuned with the procedure of §7.9 on GAT config 2 (base / b
 | `Outputs/<FAMILY>/<run>/` (GIN, GAT, PNA, TRANSFORMER) | results.json (all splits, all metrics), history.csv, curves.png, best.pt, predictions.csv (the last two not versioned) • batch_summary.csv per batch |
 | `Outputs/RWPE/<FAMILY>/<run>/` | the same files for the node-encoding runs (§7.5) • batch_summary_rwpe.csv per family |
 | `Outputs/GFP_TUNED/<FAMILY>/<run>/` | the same files for the data-tuned GFP runs (§7.6) • batch_summary_gfp_tuned.csv per family |
-| `MLP_fixed_features.ipynb` / `mlp_core.py` | the MLP cross-check of §5.6: a plain neural net on the same 93 inputs, no message passing; `mlp_core.py` scales the GBT matrix, defines the three shapes, trains with early stopping on validation PR-AUC, runs the resumable random search and the final seeds, and imports the matrix from `gbt_core.py` and the metrics / curves / summaries from `gnn_core.py` |
-| `Outputs/MLP/<run>/` | (pending) the same files for the four MLP seeds of §5.6 (`best.pt` = the state dict, not versioned) • `search/` (`configs.json`, `trials.csv`, `best_params.json`) • `batch_summary_mlp.csv`, `seed_summary_mlp.csv` |
+| `MLP_fixed_features.ipynb` / `mlp_core.py` | the MLP cross-check of §7.13: a plain neural net on the same 93 inputs, no message passing; `mlp_core.py` scales the GBT matrix, defines the three shapes, trains with early stopping on validation PR-AUC, runs the resumable random search and the final seeds, and imports the matrix from `gbt_core.py` and the metrics / curves / summaries from `gnn_core.py` |
+| `Outputs/MLP/<run>/` | the same files for the four MLP seeds of §7.13 (`best.pt` = the state dict, not versioned) • `search/` (`configs.json`, `trials.csv`, `best_params.json`) • `batch_summary_mlp.csv`, `seed_summary_mlp.csv` |
 | `Outputs/GBT/<run>/` | the same files for the four LightGBM seeds of §7.7 (`best.txt` = the booster, not versioned) • `search/` (`configs.json`, `trials.csv`, `best_params.json`) • `batch_summary_gbt.csv`, `seed_summary_gbt.csv` • `tail_check.csv` (the side check of the notebook appendix: one row per seed × window, outside the protocol) |
 | `Data/gfp_variants/` (not versioned) | `tuned.npy` (float32 [5,077,237, 64]) + `tuned_cols.json`, rows aligned with `edge_features.csv`; uploaded to Kaggle as the dataset `hi-small-gfp-tuned` |
 | `Data/rwpe/` (not versioned) | `rwpe_k{8,16}_{train,val,test}.pt` (float32 [515,070, k]) + per-step logs; uploaded to Kaggle as the dataset `hi-small-rwpe` |

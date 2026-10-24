@@ -99,3 +99,7 @@ LightGBM on the same 93 inputs, no message passing, hyperparameters from one suc
 search, every fit stopped on the validation loss, four seeds) lands at test F1 0.520 ± 0.008 and PR-AUC 0.483 — level with the best
 GIN run and above GATv2, but 0.08–0.09 below PNA and the graph transformer: on identical inputs,
 message passing with those two operators adds something the hand-crafted graph features alone do not.
+The MLP cross-check (§7.13: a plain neural net on the same 93 inputs, recipe from one random search of
+100 settings, four seeds) lands at test F1 0.489 ± 0.006 and PR-AUC 0.419 — below the trees and level
+with the best GATv2 run — so the PNA / transformer lead over LightGBM is message passing, not "a neural
+net beats trees".

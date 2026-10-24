@@ -1,0 +1,24 @@
+{
+  "trial": 28,
+  "select": "val_pr_auc",
+  "val_pr_auc": 0.47314395234119555,
+  "val_f1": 0.5399664617099746,
+  "knobs": {
+    "hidden": 512,
+    "depth": 4,
+    "shape": "flat",
+    "norm": "batch",
+    "dropout": 0.2,
+    "lr": 0.003,
+    "weight_decay": 0.0,
+    "pos_weight": 4.0,
+    "batch_size": 2048
+  },
+  "n_trials": 100,
+  "seeds": [
+    42
+  ],
+  "epochs": 60,
+  "patience": 10,
+  "draw_seed": 42
+}

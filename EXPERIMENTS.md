@@ -57,11 +57,12 @@ Mirrored on the Notion experiments page (kept in sync).
       Cineca (Leonardo Booster) by Loris from `cineca/`. Rules and tracker in section 2b, retrain rows in section 3b.
       Package checked locally on the slice (22 Oct) and sent to Loris (23 Oct); next: check → probe → draw → early
       check-in on trials 0–9
-- [ ] **MLP cross-check** — a plain neural net on the same 93 inputs as the GBT (20 baseline + 61 GFP V0
+- [x] **MLP cross-check** — a plain neural net on the same 93 inputs as the GBT (20 baseline + 61 GFP V0
       + 6 + 6 entity one-hots), no message passing: one random search (100 unique trials, one seed each; shapes flat /
       funnel / resnet; every fit stopped on validation PR-AUC) on the train rows, scored on validation, then 4 seeds;
-      Kaggle GPU (`MLP_fixed_features.ipynb`, `mlp_core.py`, section 3 "MLP cross-check runs"). Next: Sandro runs it on
-      Kaggle → results → `Progress_Report.md` §7.13
+      one Kaggle GPU session, 23–24 Oct (`MLP_fixed_features.ipynb`, `mlp_core.py`, section 3 "MLP cross-check runs");
+      results in `Progress_Report.md` §7.13 (below the trees and the best GIN run, level with GATv2, far below PNA and
+      the Transformer: the PNA / Transformer lead over LightGBM is message passing, not "a neural net")
 
 ---
 
@@ -109,7 +110,7 @@ dropout 0.3, identical training recipe — so only the aggregation rule differs.
       `TRANSFORMER_fixed_architecture.ipynb` · 7 runs
 - [x] **No message passing — LightGBM** on the same features (hand-crafted graph features vs
       message passing) · `GBT_fixed_features.ipynb` · 1 search + 4 seeds (section 3, "GBT cross-check runs")
-- [ ] **No message passing — MLP** on the same features (is the GNN gain over the trees message passing,
+- [x] **No message passing — MLP** on the same features (is the GNN gain over the trees message passing,
       or just a neural net?) · `MLP_fixed_features.ipynb` · 1 search + 4 seeds (section 3, "MLP cross-check runs")
 
 **Two extra questions about message passing itself (optional)**
@@ -424,11 +425,11 @@ batch {2,048, 8,192}. Test is never used until the four final models are scored.
 `Outputs/MLP/<run>/`, the search log in `Outputs/MLP/search/`, the summaries in
 `Outputs/MLP/batch_summary_mlp.csv` and `seed_summary_mlp.csv`.*
 
-- [ ] **MLP search** · random search, 100 trials, one seed each, on the train rows, ranked by validation PR-AUC → `Outputs/MLP/search/best_params.json` + `trials.csv`
-- [ ] **MLP-42** · all 93 features · seed 42 → `Outputs/MLP/mlp_readout-full_seed-42/` — the run compared with the single-seed GNN runs
-- [ ] **MLP-43** · all 93 features · seed 43 → `Outputs/MLP/mlp_readout-full_seed-43/`
-- [ ] **MLP-44** · all 93 features · seed 44 → `Outputs/MLP/mlp_readout-full_seed-44/`
-- [ ] **MLP-45** · all 93 features · seed 45 → `Outputs/MLP/mlp_readout-full_seed-45/`
+- [x] **MLP search** · random search, 100 trials, one seed each, on the train rows, ranked by validation PR-AUC → `Outputs/MLP/search/best_params.json` + `trials.csv` (winner: trial 28, flat 93 → 512 × 4 → 1, BatchNorm)
+- [x] **MLP-42** · all 93 features · seed 42 → `Outputs/MLP/mlp_readout-full_seed-42/` — the run compared with the single-seed GNN runs
+- [x] **MLP-43** · all 93 features · seed 43 → `Outputs/MLP/mlp_readout-full_seed-43/`
+- [x] **MLP-44** · all 93 features · seed 44 → `Outputs/MLP/mlp_readout-full_seed-44/`
+- [x] **MLP-45** · all 93 features · seed 45 → `Outputs/MLP/mlp_readout-full_seed-45/`
 
 **Decision rule, fixed in advance:** the four seeds give mean ± std; the MLP is set against the GBT (four
 seeds), the best run of every family and configs 3 / 7 (GFP at the readout, nothing in message passing).
@@ -442,8 +443,8 @@ close, that is stated, not hidden by picking a different epoch. The search may s
 
 - [x] **Gradient-boosted trees** on the same features, no message passing — does message passing add
       anything beyond engineered features? → planned as the "GBT cross-check runs" block above
-- [ ] **A plain neural net** on the same features, no message passing — is the GNN gain over the trees the
-      net or the message passing? → planned as the "MLP cross-check runs" block above
+- [x] **A plain neural net** on the same features, no message passing — is the GNN gain over the trees the
+      net or the message passing? → the "MLP cross-check runs" block above (done: the net loses to the trees)
 - [ ] **Seeds** — 3–4 random seeds on the winning runs, mean ± std; differences inside the seed
       spread count as ties → covered by the tuned-recipe runs of section 3b (4 seeds)
 
@@ -521,7 +522,11 @@ Same decision rule as for GIN: nothing is chosen on test; configs 4, 5 and 6 reu
 
 *Newest first. Unticked = in progress · ticked = finished and synced.*
 
-- [ ] **23 Oct** — MLP cross-check planned and coded: `mlp_core.py` (train-row scaling of the edge columns, the
+- [x] **24 Oct** — MLP cross-check finished in one Kaggle T4 session (notebook `sandrokh/notebook12baf08d19`, 9 h search +
+      4 final seeds); output pulled with the Kaggle CLI into `Outputs/MLP/` (small files committed; `best.pt`,
+      `predictions.csv` local); `Progress_Report.md` §7.13 written, MLP row added to the §7.7 comparison, README summary
+      updated. Notion not synced (page not shared with the connector)
+- [x] **23 Oct** — MLP cross-check planned and coded: `mlp_core.py` (train-row scaling of the edge columns, the
       three shapes flat / funnel / resnet in one `MLP` class, one training loop with early stopping on validation
       PR-AUC, the resumable random search, the final seeds; matrix and predictions file from `gbt_core`, metrics /
       curves / summaries from `gnn_core`) and `MLP_fixed_features.ipynb` (Kaggle GPU, committed without outputs
