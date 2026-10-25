@@ -6,9 +6,15 @@
 
 Master thesis: **does manual feature engineering help Graph Neural Networks detect money
 laundering?** We build a leakage-checked pipeline on the IBM AML **HI-Small** dataset, engineer
-transaction and structural (GFP) features, and compare GNN variants (GIN/GINE, PNA, GATv2) under
-a strictly **fixed architecture**, so any performance difference is attributable to the features —
-not to model changes.
+transaction and structural (GFP) features, and compare GNN variants (GIN/GINE, PNA, GATv2, Graph
+Transformer) under a strictly **fixed architecture**, so any performance difference is attributable to
+the features — not to model changes.
+
+| Stage | Models | Where | Status |
+|---|---|---|---|
+| Fixed v1 recipe, 7 feature configs (§7.1–7.7) | all four | Kaggle | done |
+| Recipe tuning one knob at a time, config 2 only (§7.8–7.12) | GIN (tuned + retrain), GATv2 (tuned) | Kaggle | superseded, kept for the record |
+| **Re-tuning after Luo et al. (2024)**: hidden size, depth, normalisation, residual, dropout, LR, weight decay, `pos_weight`, readout; 100 trials × 2 seeds per model on configs 2 and 4, then a 5-seed retrain of each winner (§5) | all four | Cineca (run by Loris) | in progress |
 
 Code: [GitHub repo](https://github.com/sandrokhizanishvili/gnn_for_fraudulent_patterns/tree/main) ·
 Task list: `EXPERIMENTS.md` / [Notion experiments page](https://app.notion.com/p/3e011ae27ef280889f9cd78f4cfb1a78)
@@ -319,12 +325,22 @@ message-passing box differs. The table lists what is fixed and the knobs that ma
   epochs; every fit stops after 10 epochs without a better validation PR-AUC and keeps that epoch, the
   threshold is swept on validation there, test is scored once, every metric on every split,
   `predictions.csv` for every edge.
-- Recipe chosen **once** by random search: 100 unique settings (trial 0 = the a-priori pick, a funnel
-  93 → 512 → 256 → 128 → 1 with BatchNorm and dropout 0.2), each trained once (seed 42), ranked by
-  validation PR-AUC, then frozen for seeds 42–45. Space: three shapes (flat = equal widths;
-  funnel = widths halving per layer; resnet = residual blocks of two Linears), first width 128–1,024, 2–5
-  layers, BatchNorm or none, dropout 0.1–0.5, learning rate 3e-4–3e-3, weight decay 0–1e-3, `pos_weight`
-  4–16, batch 2,048 or 8,192.
+- Recipe chosen **once** by random search: 100 unique settings drawn uniformly from the grid below
+  (trial 0 = the a-priori pick, duplicates redrawn), each trained once (seed 42), ranked by validation
+  PR-AUC, then frozen for seeds 42–45.
+
+| Knob | Values searched | Trial 0 (a-priori pick) | Winner (trial 28) |
+|---|---|---|---|
+| Shape | flat (every hidden layer = first width) · funnel (width halves per layer, floor 16) · resnet (Linear → first width, then residual blocks `z + Linear(Dropout(ReLU(BatchNorm(Linear(z)))))`) | funnel | flat |
+| First width | 128 · 256 · 512 · 1024 | 512 | 512 |
+| Hidden layers (resnet: blocks) | 2 · 3 · 4 · 5 | 3 (512 → 256 → 128) | 4 (512 × 4) |
+| Normalisation | BatchNorm · none | BatchNorm | BatchNorm |
+| Dropout | 0.1 · 0.2 · 0.3 · 0.5 | 0.2 | 0.2 |
+| Learning rate | 3e-4 · 1e-3 · 3e-3 | 1e-3 | 3e-3 |
+| Weight decay | 0 · 1e-5 · 1e-4 · 1e-3 | 1e-4 | 0 |
+| `pos_weight` | 4 · 8 · 16 | 8 | 4 |
+| Batch size | 2,048 · 8,192 | 8,192 | 2,048 |
+| Fixed for every trial | Adam, constant learning rate, ReLU, output `Linear → 1`, cap 60 epochs, early stopping patience 10 on validation PR-AUC, train-row standardisation of the 81 edge columns | | |
 - Fairness: validation picks the hyperparameters, the epoch and the threshold, so **only test F1 and
   PR-AUC are fair scores**; the paper's threshold-0.5 F1 is stored alongside.
 - Code `mlp_core.py` (matrix and predictions file from `gbt_core.py`; threshold sweep, metrics, loss
@@ -1644,7 +1660,20 @@ The second no-message-passing model of §5.6: an MLP on exactly the 93 columns t
 | 43 | flat 93 → 256 × 3 → 1 | 157,441 | batch | 0.5 | 3e-4 | 0 | 4 | 2,048 | 41 (51) | 0.457 | 0.534 |
 | 0 (the a-priori pick) | funnel 93 → 512 → 256 → 128 → 1 | 214,273 | batch | 0.2 | 1e-3 | 1e-4 | 8 | 8,192 | 20 (30) | 0.441 (rank 32) | 0.522 |
 
-- **The shape barely matters:** the best flat, funnel and resnet trials sit within 0.016 of each other, and a 68 k-parameter funnel is the runner-up to the 841 k winner. Width and depth show no trend either (best per width 0.457–0.473, per depth 0.453–0.473).
+Search trials by knob (validation PR-AUC of the single seed; deeper than 5 layers and wider than 1,024 were not in the space):
+
+| Knob | Value → trials · best · median | | | |
+|---|---|---|---|---|
+| Hidden layers | 2 → 24 · 0.453 · 0.436 | 3 → 24 · 0.457 · 0.430 | 4 → 25 · **0.473** · 0.428 | 5 → 27 · 0.464 · 0.421 |
+| First width | 128 → 28 · 0.457 · 0.423 | 256 → 25 · 0.466 · 0.430 | 512 → 18 · **0.473** · 0.438 | 1024 → 29 · 0.464 · 0.411 |
+| Normalisation | batch → 58 · **0.473** · 0.434 | none → 42 · 0.454 · 0.411 | | |
+| Dropout | 0.1 → 21 · 0.464 · 0.433 | 0.2 → 30 · **0.473** · 0.433 | 0.3 → 22 · 0.457 · 0.429 | 0.5 → 27 · 0.458 · 0.411 |
+| Learning rate | 3e-4 → 35 · 0.457 · 0.430 | 1e-3 → 32 · 0.464 · 0.438 | 3e-3 → 33 · **0.473** · 0.394 | |
+| Weight decay | 0 → 33 · **0.473** · 0.445 | 1e-5 → 17 · 0.464 · 0.440 | 1e-4 → 20 · 0.450 · 0.425 | 1e-3 → 30 · 0.454 · 0.356 |
+| pos_weight | 4 → 34 · **0.473** · 0.429 | 8 → 36 · 0.466 · 0.431 | 16 → 30 · 0.458 · 0.424 | |
+| Batch size | 2,048 → 47 · **0.473** · 0.423 | 8,192 → 53 · 0.458 · 0.429 | | |
+
+- **The shape barely matters:** the best flat, funnel and resnet trials sit within 0.016 of each other, and a 68 k-parameter funnel is the runner-up to the 841 k winner. Depth and width show no trend either: the best per depth stays within 0.453–0.473 and the median drifts down from 2 to 5 layers, so extra layers bought nothing.
 - **What matters is regularisation and normalisation:** BatchNorm raises the median trial from 0.411 to 0.434; weight decay 1e-3 is the one clearly bad value (median 0.356 against 0.440–0.445 for 0 and 1e-5); the learning rate 3e-3 gives the best trial but the worst median (0.394), i.e. it is the unstable choice — the only two failed fits (validation PR-AUC below 0.1) are resnet trials without BatchNorm at 3e-3.
 - **Budget:** 100 fits, 9.0 GPU hours, 29 epochs per fit on average (2.4–72.5 s per epoch; the 1024-wide resnets take half of the time); 16 trials reach 0.45, three reach 0.46. The winner's seed-42 fit was reproduced exactly by the final seed-42 run below (same best epoch, same validation PR-AUC), so the search and the finals are consistent.
 
