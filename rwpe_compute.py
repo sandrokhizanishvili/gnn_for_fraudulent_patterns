@@ -1,9 +1,9 @@
 '''Random-walk positional encoding (RWPE) of one graph snapshot, exact, on CPU.
 
-RWPE(v)[k - 1] = probability that a k-step random walk starting at v is back at v, k = 1..K,
-with P = D_out^-1 A built from the snapshot's own edges WITHOUT self-loops (src == dst dropped;
-decision in CLAUDE.md 3b). Same maths as PyG's AddRandomWalkPE (checked in RWPE_encoding.ipynb),
-written with scipy so every step's time, memory and fill-in can be logged.
+RWPE(v)[k - 1] = probability that a k-step random walk starting at v is back at v, k = 1..K, with
+P = D_out^-1 A built from the snapshot's own edges without self-loops (src == dst dropped, see CLAUDE.md
+section 3b). Same maths as PyG's AddRandomWalkPE (checked in RWPE_encoding.ipynb), written with scipy so every
+step's time, memory and fill-in can be logged.
 
 usage: python rwpe_compute.py <split> <K> <data_dir> <out_dir> [--keep-self-loops]
   split    train | val | test  (cumulative snapshots: first SPLIT_EDGES[split] rows of edge_features.csv)

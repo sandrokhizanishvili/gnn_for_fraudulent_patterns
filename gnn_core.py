@@ -1,22 +1,15 @@
-'''Shared code for the fixed-architecture GNN experiments (GIN / PNA / GAT / Transformer).
+'''Shared code for the fixed-architecture GNN experiments (GIN / PNA / GATv2 / Transformer).
 
-Everything that must be identical across operators lives here and is imported by the
-operator notebooks, which only set OPERATOR, the batch of knob configs and paths.
-Knobs handled here: mp / readout edge columns, MP_DIRECTION, TEMPORAL_SAMPLING, NODE_ENC
-(none | rwpe8 | rwpe16: pre-computed node encodings appended to the 6 entity columns) and
-GFP_VARIANT (v0 | tuned: which GFP sheet fills the GFP block of edge_attr, swapped at load time).
+Everything that must be identical across operators lives here and is imported by the operator notebooks,
+which only set OPERATOR, the batch of knob configs and paths. Knobs: mp / readout edge columns, NODE_ENC
+(none | rwpe8 | rwpe16: a pre-computed node encoding appended to the 6 entity columns) and GFP_VARIANT
+(v0 | tuned: which GFP sheet fills the GFP block of edge_attr, swapped at load time).
 
-Recipe tuning (EXPERIMENTS.md section 2b): the training recipe is a dict (hidden, layers, dropout,
-norm, ffn, neighbours, batch size, epochs = cosine length, lr, weight decay, pos_weight). recipe=None
-means the v1 recipe below and reproduces every finished run exactly. Tuning runs (run_tuning_trial),
-the frozen recipe.json (save_recipe / load_recipe) and the train+val retrain (run_final) live at the
-end of this file.
-
-Luo et al. (2024) tuning (decided 22 Oct 2026, run on Cineca by cineca/): random search per operator and
-config with two seeds per trial; adds the recipe knobs residual (identity | linear | none), readout_layers,
-readout_width, lr_schedule (cosine | constant), num_workers and select_metric (f1 | pr_auc). Their defaults
-are the v1 values, so recipe=None is unchanged. The draw, the two-seed finalisation and the probe helpers
-are the last section of this file.
+The training recipe is a dict of knobs (hidden, layers, dropout, norm, ...); recipe=None is the v1 recipe
+below and reproduces every v1 run exactly. The file ends with the recipe-tuning code: the one-pass tuning
+(one knob at a time: run_tuning_trial, choose_winner, probe_depths), the frozen recipe.json (save_recipe /
+load_recipe), the train + val retrain (run_final) and the Luo et al. (2024) random search that cineca/ runs
+(draw_luo_trials, probe_memory, finalise_trial).
 '''
 import gc
 import glob
@@ -24,7 +17,6 @@ import itertools
 import json
 import os
 import random
-import shutil
 import time
 from pathlib import Path
 
@@ -43,7 +35,7 @@ from torch_geometric.nn import GATv2Conv, GINConv, GINEConv, PNAConv, Transforme
 from torch_geometric.utils import degree
 from tqdm.auto import tqdm
 
-# ---------------- v1 recipe (CLAUDE.md §3) — identical for every run before tuning; a tuned run passes a recipe dict ----------------
+# ---------------- v1 recipe (CLAUDE.md section 3): the same for every run; a tuned run passes a recipe dict ----------------
 HIDDEN        = 128
 NUM_LAYERS    = 2
 DROPOUT       = 0.3
@@ -52,7 +44,7 @@ NUM_NEIGHBORS = [100, 100]     # neighbours sampled per hop, one entry per layer
 BATCH_SIZE    = 8192           # seed edges per mini-batch
 EPOCHS        = 20
 LR            = 1e-3
-WEIGHT_DECAY  = 1e-5           # Adam L2 term; every run since the first batch used it, so it is part of the recipe
+WEIGHT_DECAY  = 1e-5           # Adam L2 term, part of the v1 recipe
 POS_WEIGHT    = 8.0            # weight of the laundering class in the loss
 SEED          = 42
 
@@ -76,10 +68,6 @@ NORMS = ('none', 'batch', 'layer')            # normalisation after each message
 RESIDUALS = ('identity', 'linear', 'none')    # identity = v1 (h + layer(h)); linear = Luo et al. 2024 Eq. 7
 LR_SCHEDULES = ('cosine', 'constant')
 SELECT_METRICS = ('f1', 'pr_auc')             # validation metric that picks the best epoch (and the winning trial)
-RECIPE_KNOBS = ('hidden', 'num_layers', 'dropout', 'norm', 'ffn', 'num_neighbors', 'batch_size',
-                'epochs', 'lr', 'weight_decay', 'pos_weight', 'self_loops', 'residual', 'readout_layers',
-                'readout_width', 'lr_schedule', 'num_workers', 'select_metric')
-# self_loops: GATv2's add_self_loops (node i also attends to itself); the other operators ignore it
 # neighbours per hop by depth: hops 1-2 are always 100, hops 3-4 50, hops 5+ 25 (fallback: 25 and 10)
 NEIGHBOURS_BY_DEPTH = {1: [100], 2: [100, 100], 3: [100, 100, 50], 4: [100, 100, 50, 50],
                        5: [100, 100, 50, 50, 25], 6: [100, 100, 50, 50, 25, 25],
@@ -104,7 +92,8 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # ==================================================================================================
 
 def default_recipe():
-    '''The v1 recipe from the module constants (read at call time, so a scratch patch of a constant still applies).'''
+    '''The v1 recipe, read from the module constants at call time. self_loops is GATv2's add_self_loops (the other
+    operators ignore it); the knobs after it (residual ... select_metric) were added for the Luo tuning with v1 defaults.'''
     return dict(hidden=HIDDEN, num_layers=NUM_LAYERS, dropout=DROPOUT, norm='none', ffn=False,
                 num_neighbors=list(NUM_NEIGHBORS), batch_size=BATCH_SIZE, epochs=EPOCHS,
                 lr=LR, weight_decay=WEIGHT_DECAY, pos_weight=POS_WEIGHT, self_loops=True,
@@ -116,7 +105,7 @@ def full_recipe(recipe=None):
     '''The v1 recipe overlaid with the given knobs; unknown keys or a depth / neighbour mismatch are errors.'''
     out = default_recipe()
     extra = set(recipe or {}) - set(out)
-    assert not extra, f'unknown recipe keys {sorted(extra)}; knobs are {RECIPE_KNOBS}'
+    assert not extra, f'unknown recipe keys {sorted(extra)}; knobs are {sorted(out)}'
     out.update(recipe or {})
     out['num_neighbors'] = [int(n) for n in out['num_neighbors']]
     assert out['norm'] in NORMS, f"norm must be one of {NORMS}, got {out['norm']!r}"
@@ -156,7 +145,7 @@ def recipe_tag(recipe, base=None):
                 parts.append('nb' + '-'.join(str(n) for n in full['num_neighbors']))
         else:
             parts.append(f'{short[knob]}{full[knob]:g}')
-    # Luo-tuning knobs; num_workers and select_metric are run settings, not part of the tag
+    # num_workers and select_metric are run settings, not part of the tag
     if full['residual'] != ref['residual']:
         parts.append({'identity': 'resid', 'linear': 'reslin', 'none': 'nores'}[full['residual']])
     if full['readout_layers'] != ref['readout_layers']:
@@ -207,8 +196,8 @@ def set_seed(seed):
 def normalise_gfp_sheet(values, cols, n_train):
     '''The GFP normalisation of Data_preparation.ipynb section 6, fit on the first n_train rows only.
 
-    Pattern bins (*_bins_*) untouched; fan/deg/sum/avg/var/kurtosis: log1p -> clip at train p1/p99
-    -> StandardScaler; ratio/skew: clip -> StandardScaler. values [E, len(cols)] float32 -> float32.
+    Pattern bins (*_bins_*) untouched; fan / deg / sum / avg / var / kurtosis: log1p -> clip at train p1 / p99
+    -> StandardScaler; ratio / skew: clip -> StandardScaler. values [E, len(cols)] float32 -> float32.
     '''
     assert values.shape == (values.shape[0], len(cols)) and values.dtype == np.float32
     assert not np.isnan(values).any(), 'GFP sheet contains NaN'
@@ -354,9 +343,8 @@ def gin_mlp(hidden):
 def make_conv(operator, hidden, mp_edge_dim, deg_hist=None, self_loops=True):
     '''One graph convolution for the operator; the only place operators differ.
 
-    mp_edge_dim = 0 -> edge features stay out of message passing.
-    self_loops: GATv2's add_self_loops (recipe knob; v1 = True); the other operators ignore it.
-    transformer: root_weight (the node's own state through lin_skip) is part of the standard operator.
+    mp_edge_dim = 0 -> edge features stay out of message passing. self_loops is GATv2's add_self_loops
+    (v1 = True); the other operators ignore it. PyG defaults are written out where they matter.
     '''
     if operator == 'gin':
         if mp_edge_dim > 0:
@@ -371,17 +359,14 @@ def make_conv(operator, hidden, mp_edge_dim, deg_hist=None, self_loops=True):
             return PNAConv(hidden, hidden, edge_dim=mp_edge_dim, **pna_kwargs)
         return PNAConv(hidden, hidden, **pna_kwargs)
     if operator == 'gat':
-        # HEADS heads concatenated -> hidden; lin_edge (edge_dim) is the only width-dependent tensor.
-        # add_self_loops (recipe knob self_loops, v1 = True): node i also attends to itself; fill_value: its
-        # self-loop gets the mean of i's incoming edge features. PyG's defaults, written out to be visible.
+        # HEADS heads concatenated -> hidden; a self-loop gets the mean of the node's incoming edge features
         if mp_edge_dim > 0:
             return GATv2Conv(hidden, hidden // HEADS, heads=HEADS, edge_dim=mp_edge_dim,
                              add_self_loops=self_loops, fill_value='mean', bias=True)
         return GATv2Conv(hidden, hidden // HEADS, heads=HEADS,
                          add_self_loops=self_loops, fill_value='mean', bias=True)
     if operator == 'transformer':
-        # HEADS heads concatenated -> hidden; lin_edge (edge_dim) is the only width-dependent tensor.
-        # beta, dropout and root_weight are PyG's defaults, written out to be visible.
+        # HEADS heads concatenated -> hidden; root_weight = the node's own state through lin_skip
         if mp_edge_dim > 0:
             return TransformerConv(hidden, hidden // HEADS, heads=HEADS, concat=True,
                                    edge_dim=mp_edge_dim, beta=False, dropout=0.0, root_weight=True)
@@ -404,24 +389,18 @@ def make_norm(norm, hidden):
 class MPLayer(nn.Module):
     '''One message-passing step with a residual: h <- h + Dropout(ReLU(Norm(conv(h, edges)))).
 
-    conv_in aggregates the accounts that PAID a node; bidirectional adds conv_out over
-    reversed edges ("whom I paid") and merges the two hidden-dim views back to hidden.
-    norm='none' (v1) is the identity; ffn adds the GNN+ block h <- Norm(h + W2(Dropout(ReLU(W1 h))))
-    after the residual (expansion 2), where the FFN's Norm is the layer norm choice, or LayerNorm when
-    that choice is 'none' (the FFN block always ends in a normalisation). Neither registers parameters when off.
-    residual: 'identity' (v1, the formula above); 'linear' (Luo et al. 2024 Eq. 7, tunedGNN medium_graph/model.py):
-    h <- Dropout(ReLU(Norm(conv(h) + W_r h))); 'none': h <- Dropout(ReLU(Norm(conv(h)))). Only 'linear' adds weights.
+    conv_in aggregates the accounts that paid a node (the module name is fixed by the saved checkpoints).
+    norm='none' (v1) is the identity. ffn adds the GNN+ block h <- Norm(h + W2(Dropout(ReLU(W1 h)))) after the
+    residual; its Norm is the layer's norm choice, or LayerNorm when that is 'none'. residual: 'identity' (v1, the
+    formula above), 'linear' (Luo et al. 2024 Eq. 7: h <- Dropout(ReLU(Norm(conv(h) + W_r h)))) or 'none' (no skip).
+    Only ffn and the linear residual add parameters, so v1 checkpoints load unchanged.
     '''
 
-    def __init__(self, operator, hidden, mp_edge_dim, bidirectional, dropout, deg_hist=None, norm='none', ffn=False,
+    def __init__(self, operator, hidden, mp_edge_dim, dropout, deg_hist=None, norm='none', ffn=False,
                  self_loops=True, residual='identity'):
         super().__init__()
         self.use_edges = mp_edge_dim > 0
-        self.bidirectional = bidirectional
         self.conv_in = make_conv(operator, hidden, mp_edge_dim, deg_hist, self_loops)
-        if bidirectional:
-            self.conv_out = make_conv(operator, hidden, mp_edge_dim, deg_hist, self_loops)
-            self.merge = nn.Linear(2 * hidden, hidden)
         self.dropout = nn.Dropout(dropout)
         self.norm = make_norm(norm, hidden)
         self.ffn = None
@@ -433,18 +412,8 @@ class MPLayer(nn.Module):
         if residual == 'linear':
             self.residual_proj = nn.Linear(hidden, hidden)   # registered last, so v1 layers initialise unchanged
 
-    def apply_conv(self, conv, h, edge_index, edge_attr):
-        '''Route the call: convs with edge features take edge_attr, the others do not.'''
-        if self.use_edges:
-            return conv(h, edge_index, edge_attr)
-        return conv(h, edge_index)
-
     def forward(self, h, edge_index, edge_attr):
-        out = self.apply_conv(self.conv_in, h, edge_index, edge_attr)
-        if self.bidirectional:
-            # flip(0) swaps senders and receivers; a transaction's features describe it both ways
-            out_rev = self.apply_conv(self.conv_out, h, edge_index.flip(0), edge_attr)
-            out = self.merge(torch.cat([out, out_rev], dim=1))
+        out = self.conv_in(h, edge_index, edge_attr) if self.use_edges else self.conv_in(h, edge_index)
         if self.residual == 'linear':
             out = out + self.residual_proj(h)                 # the paper's residual enters before the norm
         out = self.dropout(torch.relu(self.norm(out)))
@@ -454,27 +423,25 @@ class MPLayer(nn.Module):
         return h
 
 
-#   node features x [N x node_dim] -> node_proj Linear -> hidden, ReLU
-#   num_layers x MPLayer: conv (+ W_e . e_uv when MP edge features are on), Norm, ReLU, Dropout, residual, (FFN)
-#   readout: concat [h_src || h_dst || e_seed] -> Linear hidden -> ReLU -> Dropout -> Linear 1 (logit)
-#   Only W_e (edge width) and the readout's first Linear (seed width) change between feature configs.
 class EdgeClassifier(nn.Module):
     '''Fixed-architecture edge classifier: node_proj -> num_layers message-passing layers -> readout MLP.
 
-    Module names (node_proj, layers.i.conv_in/conv_out/merge, classifier) are the ones the
-    saved best.pt checkpoints use — do not rename them. recipe=None -> the v1 recipe.
-    The readout has readout_layers Linears; each hidden one is Linear -> ReLU -> Dropout with
-    readout_width x hidden neurons (v1: 2 layers, width 1 -> classifier.0 / classifier.3 as always).
+    x [N, node_dim] -> node_proj Linear -> hidden, ReLU -> MPLayers -> readout on the seed edge:
+    concat [h_src || h_dst || e_seed] -> (readout_layers - 1) x (Linear -> ReLU -> Dropout) -> Linear 1 (logit).
+    Between feature configs only the conv's edge projection and the readout's first Linear change width.
+    Module names (node_proj, layers.i.conv_in, classifier) are fixed by the saved checkpoints. recipe=None -> v1.
+    bidirectional (message passing over reversed edges too) is not implemented; the parameter stays because the
+    notebooks pass it (always False).
     '''
 
-    def __init__(self, operator, node_dim, mp_edge_dim, readout_edge_dim, bidirectional, deg_hist=None, recipe=None):
+    def __init__(self, operator, node_dim, mp_edge_dim, readout_edge_dim, bidirectional=False, deg_hist=None, recipe=None):
         super().__init__()
+        assert not bidirectional, 'only message passing over incoming edges is implemented'
         r = full_recipe(recipe)
         hidden = r['hidden']
         self.node_proj = nn.Linear(node_dim, hidden)
         self.layers = nn.ModuleList(
-            [MPLayer(operator, hidden, mp_edge_dim, bidirectional, r['dropout'], deg_hist, r['norm'], r['ffn'],
-                     r['self_loops'], r['residual'])
+            [MPLayer(operator, hidden, mp_edge_dim, r['dropout'], deg_hist, r['norm'], r['ffn'], r['self_loops'], r['residual'])
              for _ in range(r['num_layers'])])
         width = max(1, int(round(r['readout_width'] * hidden)))   # neurons per readout hidden layer
         in_dim, readout = 2 * hidden + readout_edge_dim, []
@@ -506,26 +473,18 @@ def count_params(model):
 
 
 def invariant_params(model):
-    '''Parameters whose shape does not depend on the edge-feature widths.
+    '''Parameters whose shape does not depend on the feature widths; identical across the feature configs of a family.
 
-    node_proj.weight is counted at its base width (hidden x BASE_NODE_DIM): a node encoding
-    (NODE_ENC) only widens it, exactly like edge features widen the edge projections.
-    67,587 for the GIN family, 67,585 for the GATv2 family (lin_l / lin_r / att / bias count,
-    lin_edge does not), 427,265 for the PNA family (its message MLP input widens from 2 x 128
-    to 3 x 128 once edge features enter, so its first Linear pre_nns.0.0 is counted with the
-    edge projections; PNAConv's output `lin` shares the GINE tag and is left out — it is
-    constant, so the check is unaffected), 133,121 for the Transformer family (lin_key /
-    lin_query / lin_value / lin_skip count, lin_edge does not) — all at the v1 recipe; a tuned
-    recipe (hidden, layers, norm, FFN, linear residual, readout shape) gives its own constant. Excluded: the edge
-    projection inside the conv (.lin. / lin_edge / edge_encoder / pre_nns.0.0.) and the readout's first
-    Linear (classifier.0., whatever the readout depth). Must be identical across feature configs within a family
-    and recipe.
+    Left out: the edge projection inside the conv (.lin. / lin_edge / edge_encoder, and PNA's message MLP input
+    pre_nns.0.0., which widens when edge features enter) and the readout's first Linear (classifier.0.).
+    node_proj.weight is counted at the base node width 6, so a node encoding widens it without changing the count.
+    v1 values: GIN 67,587 · GATv2 67,585 · PNA 427,265 · Transformer 133,121; a tuned recipe has its own constant.
     '''
     width_dependent = ('.lin.', 'lin_edge', 'edge_encoder', 'pre_nns.0.0.', 'classifier.0.')
     total = 0
     for name, p in model.named_parameters():
         if name == 'node_proj.weight':
-            total += model.node_proj.out_features * BASE_NODE_DIM   # the entity columns only; encoding columns are width-dependent
+            total += model.node_proj.out_features * BASE_NODE_DIM
         elif not any(tag in name for tag in width_dependent):
             total += p.numel()
     return total
@@ -535,13 +494,12 @@ def invariant_params(model):
 # loaders and prediction
 # ==================================================================================================
 
-def make_loader(graph, shuffle, mp_idx, readout_idx, temporal=False, recipe=None):
-    '''Neighbour-sampling loader over a split's evaluated edges + their readout features.
+def make_loader(graph, shuffle, mp_idx, readout_idx, recipe=None):
+    '''Neighbour-sampling loader over a split's evaluated edges + their readout features; built once per run.
 
-    Built once per run and reused by every epoch (rebuilding per epoch exhausted Kaggle RAM).
-    Neighbours per hop and the batch size come from the recipe (None = v1). recipe num_workers > 0 samples
-    in that many worker processes, re-created for every pass (not persistent, so a resumed run samples the
-    same neighbours: the workers are seeded from the main RNG, which resume.pt restores).
+    Neighbours per hop and the batch size come from the recipe (None = v1). recipe num_workers > 0 samples in
+    that many non-persistent worker processes (seeded from the main RNG, so a resumed run samples the same
+    neighbours).
     '''
     r = full_recipe(recipe)
     mp_edge_attr = graph.edge_attr[:, mp_idx] if len(mp_idx) > 0 else None
@@ -555,21 +513,15 @@ def make_loader(graph, shuffle, mp_idx, readout_idx, temporal=False, recipe=None
 
     kwargs = dict(num_neighbors=r['num_neighbors'], batch_size=r['batch_size'], edge_label_index=seed_index,
                   edge_label=seed_y, shuffle=shuffle)
-    if temporal:
-        # only edges earlier than the seed are sampled (needs a recent pyg-lib)
-        kwargs.update(time_attr='edge_time', edge_label_time=graph.edge_time[seed_mask])
     if r['num_workers'] > 0:
         kwargs.update(num_workers=int(r['num_workers']), persistent_workers=False)
     return LinkNeighborLoader(mp_graph, **kwargs), seed_feats
 
 
-def make_loaders(graphs, mp_idx, readout_idx, temporal=False, recipe=None, splits=SPLITS):
-    '''One (loader, seed_feats) pair per split; train is shuffled, val/test are not.
-
-    splits=('train', 'val') is what tuning uses: no test loader is ever built there.
-    '''
-    return {split: make_loader(graphs[split], split == 'train', mp_idx, readout_idx, temporal, recipe)
-            for split in splits}
+def make_loaders(graphs, mp_idx, readout_idx, recipe=None, splits=SPLITS):
+    '''One (loader, seed_feats) pair per split; train is shuffled, val / test are not. Tuning passes
+    splits=('train', 'val'), so no test loader is built there.'''
+    return {split: make_loader(graphs[split], split == 'train', mp_idx, readout_idx, recipe) for split in splits}
 
 
 def forward_batch(model, batch, seed_feats):
@@ -661,7 +613,7 @@ def score_all_splits(model, loaders, graphs, threshold, seed=None):
     Returns {split: metrics} and {split: {'edge_id', 'y', 'prob'}}, where edge_id is the edge's
     position in the graph edge list = its row in Data/edge_features.csv.
     '''
-    set_seed(SEED if seed is None else seed)   # same neighbour samples whether scoring after training or re-scoring
+    set_seed(SEED if seed is None else seed)   # same neighbour samples every time a model is scored
     metrics, preds = {}, {}
     for split in SPLITS:
         loader, seed_feats = loaders[split]
@@ -782,18 +734,16 @@ def add_full_metrics(row, split, y, p, threshold):
 
 def train_one_run(model, loaders, out_dir, recipe=None, stop_epoch=None, eval_train_every=1,
                   patience=None, min_epochs=20, keep_epochs=False, resume_path=None, full_metrics=False):
-    '''The training loop: per-epoch validation threshold sweep, best-validation checkpoint.
+    '''The training loop: per-epoch validation threshold sweep, best-validation checkpoint (best.pt), history.csv.
 
-    recipe=None -> v1 (20 epochs, cosine T_max 20, lr 1e-3, pos_weight 8). recipe['epochs'] is the
-    schedule length; the loop runs to stop_epoch (default: all epochs) or stops early when
-    `patience` is set and the 3-epoch moving average of the validation metric has not improved for that
-    many epochs (never before min_epochs). recipe['select_metric'] (f1 = v1 | pr_auc) picks the best
-    epoch (best.pt); the returned threshold is always that epoch's validation-F1 sweep. The train split is
-    scored every eval_train_every epochs (+ the last); keep_epochs saves epoch_<e>.pt every epoch.
-    Writes best.pt and history.csv to out_dir; returns (history rows, best_epoch, best_threshold).
-    Luo tuning (both off by default): resume_path = resume.pt, written at the end of every epoch, from which a
-    killed run continues; full_metrics = every section-4 metric on train and val in every row.
-    Non-finite predictions (a diverged run) stop the loop.
+    recipe=None -> v1. recipe['epochs'] is the schedule length; the loop runs to stop_epoch (default: every
+    epoch) or stops early when `patience` is set and the 3-epoch moving average of the validation metric has not
+    improved for that many epochs (never before min_epochs). recipe['select_metric'] (val F1 = v1, or val PR-AUC)
+    picks the best epoch; the returned threshold is always that epoch's validation-F1 sweep. The train split is
+    scored every eval_train_every epochs (+ the last). keep_epochs saves epoch_<e>.pt every epoch; resume_path
+    writes resume.pt after every epoch and continues from it when it exists; full_metrics adds every section-4
+    metric of train and val to each row. Non-finite predictions (a diverged run) stop the loop.
+    Returns (history rows, best_epoch, best_threshold).
     '''
     r = full_recipe(recipe)
     metric = r['select_metric']
@@ -822,7 +772,7 @@ def train_one_run(model, loaders, out_dir, recipe=None, stop_epoch=None, eval_tr
         lr_now = optimizer.param_groups[0]['lr']
         loss_batches = train_epoch(model, train_loader, train_feats, optimizer, criterion)
 
-        # overfitting diagnostics: train and val in eval mode; train F1 reuses the val threshold
+        # train and val scored in eval mode; train F1 reuses the val threshold (overfitting diagnostics)
         score_train = (epoch % eval_train_every == 0) or epoch == last_epoch
         if score_train:
             y_train, p_train, _ = predict(model, train_loader, train_feats, 'train')
@@ -898,11 +848,11 @@ def train_one_run(model, loaders, out_dir, recipe=None, stop_epoch=None, eval_tr
 
 
 def train_fixed_epochs(model, fit_loader, out_dir, recipe, stop_epoch, resume_path=None, eval_loaders=None):
-    '''Final retrain: stop_epoch epochs on the train+val loader with the recipe's LR schedule; no model selection.
+    '''Final retrain: stop_epoch epochs on the train + val loader with the recipe's LR schedule; no model selection.
 
     Writes final.pt and history.csv (epoch, train_loss_batches, lr, seconds); returns the history rows.
     eval_loaders {split: (loader, feats)} adds eval-mode <split>_loss and <split>_pr_auc per epoch, for the curves
-    only (val is training data in this phase). resume_path: resume.pt after every epoch; a killed run continues.
+    only (val is training data here). resume_path: resume.pt after every epoch, continued from when it exists.
     '''
     r = full_recipe(recipe)
     assert 1 <= stop_epoch <= r['epochs'], f'stop_epoch {stop_epoch} must lie inside the schedule (1..{r["epochs"]})'
@@ -939,22 +889,15 @@ def train_fixed_epochs(model, fit_loader, out_dir, recipe, stop_epoch, resume_pa
     return history
 
 
-def best_epoch_from_history(history, select_metric='f1'):
-    '''best_epoch and its threshold from history.csv (first epoch with the highest val F1, or val PR-AUC).'''
-    best = int(np.argmax(history[f'val_{select_metric}'].to_numpy()))
-    return int(history['epoch'].iloc[best]), float(history['threshold'].iloc[best])
-
-
 # ==================================================================================================
 # plots, saving, naming
 # ==================================================================================================
 
 def plot_curves(history, y_test, p_test, test_pr_auc, best_epoch, run_name, path, select_metric='f1'):
-    '''curves.png: train/val loss, F1, PR-AUC per epoch (dashed line at best_epoch) + test PR curve.
+    '''curves.png: train / val loss, F1, PR-AUC per epoch (dashed line at best_epoch) + test PR curve.
 
-    Train points may be sparse (eval_train_every > 1): NaN rows are skipped per series.
-    y_test=None (tuning runs, no test) replaces the PR panel by the validation threshold per epoch.
-    select_metric='pr_auc' labels the dashed line "best epoch (val PR-AUC)" (the Luo tuning).
+    Train points may be sparse (eval_train_every > 1): NaN rows are skipped per series. y_test=None (tuning
+    runs, no test) replaces the PR panel by the validation threshold per epoch; select_metric labels the line.
     '''
     df = pd.DataFrame(history)
     fig, ax = plt.subplots(2, 2, figsize=(13, 8))
@@ -1034,28 +977,28 @@ def plot_final_curves(history, y_test, p_test, test_pr_auc, run_name, path):
     plt.close(fig)
 
 
-def run_name(operator, cfg, mp_direction='in', temporal=False, node_enc='none', gfp_variant='v0', seed=None):
-    '''<model>_mp-<mp>_readout-<ro>_dir-<dir>[_enc-<enc>][_gfp-<variant>][_temporal][_seed-<s>] (CLAUDE.md §6).
+def run_name(operator, cfg, mp_direction='in', temporal=False, node_enc='none', gfp_variant='v0'):
+    '''<model>_mp-<mp>_readout-<ro>_dir-in[_enc-<enc>][_gfp-<variant>] (CLAUDE.md section 6); the optional parts
+    appear only when the knob is not at its default.
 
-    The seed suffix appears only for an explicit seed other than 42; tuned phases keep the seed as a sub-folder.
+    Message passing is always over incoming edges without temporal sampling; mp_direction and temporal stay in the
+    signature because the notebooks pass them, and any other value is an error.
     '''
-    name = f"{operator}_mp-{cfg['mp']}_readout-{cfg['readout']}_dir-{mp_direction}"
+    assert mp_direction == 'in' and not temporal, 'only mp_direction="in" without temporal sampling is implemented'
+    name = f"{operator}_mp-{cfg['mp']}_readout-{cfg['readout']}_dir-in"
     if node_enc != 'none':
         name += f'_enc-{node_enc}'
     if gfp_variant != 'v0':
         name += f'_gfp-{gfp_variant}'
-    if temporal:
-        name += '_temporal'
-    if seed is not None and seed != SEED:
-        name += f'_seed-{seed}'
     return name
 
 
-def result_row(name, operator, cfg, mp_direction, temporal, best_epoch, threshold,
-               n_params, n_invariant, metrics, node_enc='none', gfp_variant='v0', seed=None):
-    '''The flat result row shared by results.json and batch_summary.csv.'''
+def result_row(name, operator, cfg, best_epoch, threshold, n_params, n_invariant, metrics,
+               node_enc='none', gfp_variant='v0', seed=None):
+    '''The flat result row shared by results.json and batch_summary.csv (mp_direction / temporal_sampling are
+    constant columns, kept so old and new result files have the same layout).'''
     row = {'run': name, 'operator': operator, 'mp': cfg['mp'], 'readout': cfg['readout'],
-           'mp_direction': mp_direction, 'temporal_sampling': temporal, 'node_enc': node_enc,
+           'mp_direction': 'in', 'temporal_sampling': False, 'node_enc': node_enc,
            'gfp_variant': gfp_variant, 'seed': SEED if seed is None else seed,
            'best_epoch': best_epoch, 'threshold': threshold,
            'params': n_params, 'invariant_params': n_invariant}
@@ -1088,37 +1031,34 @@ def print_model_header(name, mp_idx, readout_idx, n_params, n_invariant, node_di
 # ==================================================================================================
 
 def run_experiment(operator, cfg, graphs, col_sets, node_dim, out_root, mp_direction='in', temporal=False,
-                   node_enc='none', enc_dir=None, gfp_variant='v0', recipe=None, seed=None, eval_train_every=1):
-    '''Train and evaluate one knob configuration end-to-end; returns the flat result row.
+                   node_enc='none', enc_dir=None, gfp_variant='v0', recipe=None, eval_train_every=1):
+    '''Train and evaluate one knob configuration end-to-end (seed 42); returns the flat result row.
 
-    node_enc = 'none' leaves graph.x and node_dim as loaded; 'rwpe<k>' appends the k RWPE columns
-    from enc_dir, so only node_proj widens (6 + k -> 128). gfp_variant must be the one the graphs
-    were loaded with (load_graphs); it only labels the run, the swap happened at load time.
-    recipe=None and seed=None reproduce the v1 runs exactly.
+    node_enc = 'none' leaves graph.x and node_dim as loaded; 'rwpe<k>' appends the k RWPE columns from enc_dir,
+    so only node_proj widens (6 + k -> 128). gfp_variant must be the one the graphs were loaded with
+    (load_graphs); it only labels the run, the swap happened at load time. recipe=None reproduces the v1 runs.
     '''
     assert len(col_sets['gfp']) == GFP_WIDTH[gfp_variant], \
         f"graphs hold a {len(col_sets['gfp'])}-column GFP block, not the {gfp_variant!r} sheet; reload with load_graphs"
-    name = run_name(operator, cfg, mp_direction, temporal, node_enc, gfp_variant, seed)
+    name = run_name(operator, cfg, mp_direction, temporal, node_enc, gfp_variant)
     out_dir = f'{out_root}/{name}'
     os.makedirs(out_dir, exist_ok=True)
     mp_idx, readout_idx = col_sets[cfg['mp']], col_sets[cfg['readout']]
     node_dim = set_node_encoding(graphs, node_enc, enc_dir)   # 6 for 'none', 6 + k for 'rwpe<k>'
 
-    set_seed(SEED if seed is None else seed)
+    set_seed(SEED)
     deg_hist = in_degree_histogram(graphs['train']) if operator == 'pna' else None
-    model = build_model(operator, node_dim, len(mp_idx), len(readout_idx),
-                        mp_direction == 'bidirectional', deg_hist, recipe)
+    model = build_model(operator, node_dim, len(mp_idx), len(readout_idx), deg_hist=deg_hist, recipe=recipe)
     n_params, n_invariant = count_params(model), invariant_params(model)
     print_model_header(name, mp_idx, readout_idx, n_params, n_invariant, node_dim)
 
-    loaders = make_loaders(graphs, mp_idx, readout_idx, temporal, recipe)
+    loaders = make_loaders(graphs, mp_idx, readout_idx, recipe)
     history, best_epoch, threshold = train_one_run(model, loaders, out_dir, recipe, eval_train_every=eval_train_every)
 
     # final evaluation: best checkpoint, one validation-chosen threshold, test scored once
     model.load_state_dict(torch.load(f'{out_dir}/best.pt', map_location=device))
-    metrics, preds = score_all_splits(model, loaders, graphs, threshold, seed)
-    row = result_row(name, operator, cfg, mp_direction, temporal, best_epoch, threshold,
-                     n_params, n_invariant, metrics, node_enc, gfp_variant, seed)
+    metrics, preds = score_all_splits(model, loaders, graphs, threshold)
+    row = result_row(name, operator, cfg, best_epoch, threshold, n_params, n_invariant, metrics, node_enc, gfp_variant)
     save_run(out_dir, row, recipe)
     save_predictions(out_dir, graphs, preds, threshold)
     plot_curves(history, preds['test']['y'], preds['test']['prob'], metrics['test']['pr_auc'],
@@ -1166,12 +1106,12 @@ def seed_summary(rows, out_root, filename='seed_summary.csv'):
 # recipe tuning — trials on the train / val graphs only (EXPERIMENTS.md section 2b)
 # ==================================================================================================
 
-def run_tuning_seed(operator, cfg, graphs, col_sets, node_dim, trial_dir, recipe, seed, mp_direction='in',
-                    temporal=False, eval_train_every=5, patience=10, min_epochs=20, resume=False, full_metrics=False):
+def run_tuning_seed(operator, cfg, graphs, col_sets, node_dim, trial_dir, recipe, seed, eval_train_every=5,
+                    patience=10, min_epochs=20, resume=False, full_metrics=False):
     '''One (trial, seed): train on the train graph, validate every epoch, keep a checkpoint per epoch.
 
     No test loader, no predictions. Writes seed-<s>/history.csv, curves.png, best.pt, epoch_<e>.pt.
-    Luo tuning: resume=True continues from seed-<s>/resume.pt; full_metrics = every section-4 metric per epoch.
+    resume=True continues from seed-<s>/resume.pt; full_metrics = every section-4 metric per epoch.
     Returns params, invariant params, epochs run and seconds per epoch.
     '''
     out_dir = f'{trial_dir}/seed-{seed}'
@@ -1179,12 +1119,11 @@ def run_tuning_seed(operator, cfg, graphs, col_sets, node_dim, trial_dir, recipe
     mp_idx, readout_idx = col_sets[cfg['mp']], col_sets[cfg['readout']]
     set_seed(seed)
     deg_hist = in_degree_histogram(graphs['train']) if operator == 'pna' else None
-    model = build_model(operator, node_dim, len(mp_idx), len(readout_idx), mp_direction == 'bidirectional',
-                        deg_hist, recipe)
+    model = build_model(operator, node_dim, len(mp_idx), len(readout_idx), deg_hist=deg_hist, recipe=recipe)
     n_params, n_invariant = count_params(model), invariant_params(model)
     name = f'{os.path.basename(trial_dir)} seed {seed}'
     print_model_header(name, mp_idx, readout_idx, n_params, n_invariant, node_dim)
-    loaders = make_loaders(graphs, mp_idx, readout_idx, temporal, recipe, splits=('train', 'val'))
+    loaders = make_loaders(graphs, mp_idx, readout_idx, recipe, splits=('train', 'val'))
     history, best_epoch, _ = train_one_run(model, loaders, out_dir, recipe, eval_train_every=eval_train_every,
                                            patience=patience, min_epochs=min_epochs, keep_epochs=True,
                                            resume_path=f'{out_dir}/resume.pt' if resume else None,
@@ -1213,15 +1152,14 @@ def seed_mean_best_epoch(histories, window=3, column='val_f1'):
 
 
 def score_trial(operator, cfg, graphs, col_sets, node_dim, trial_dir, recipe, seeds, stage, seed_info,
-                mp_direction='in', temporal=False, window=3, from_history=False, extra=None):
+                window=3, from_history=False, extra=None):
     '''After the last seed: score each seed's checkpoint at the seed-mean best epoch on train and val, write trial.json.
 
-    Each seed uses its own validation threshold of that epoch. The per-epoch checkpoints are deleted, then
-    trial.json is written: it marks the trial as finished (resume skips it). The best epoch comes from the
-    validation curve of recipe['select_metric'] smoothed over `window` epochs.
-    Luo tuning: from_history=True reads the per-seed metrics from each seed's history.csv at that epoch instead of
-    re-scoring (train and val are scored every epoch there, so these are the predictions the epoch was chosen on;
-    graphs / col_sets / node_dim may be None). `extra` is merged into trial.json.
+    The best epoch comes from the validation curve of recipe['select_metric'] smoothed over `window` epochs; each
+    seed uses its own validation threshold of that epoch. The per-epoch checkpoints are deleted, then trial.json
+    is written: it marks the trial as finished (a rerun skips it). from_history=True reads the per-seed metrics
+    from each seed's history.csv at that epoch instead of re-scoring the checkpoints (graphs / col_sets / node_dim
+    may be None then). `extra` is merged into trial.json.
     '''
     r = full_recipe(recipe)
     metric = r['select_metric']
@@ -1241,10 +1179,9 @@ def score_trial(operator, cfg, graphs, col_sets, node_dim, trial_dir, recipe, se
             metrics = {split: {m: float(row[f'{split}_{m}']) for m in METRICS + ('loss',)} for split in ('train', 'val')}
         else:
             set_seed(s)
-            model = build_model(operator, node_dim, len(mp_idx), len(readout_idx), mp_direction == 'bidirectional',
-                                deg_hist, recipe)
+            model = build_model(operator, node_dim, len(mp_idx), len(readout_idx), deg_hist=deg_hist, recipe=recipe)
             model.load_state_dict(torch.load(f'{trial_dir}/seed-{s}/epoch_{best_epoch:03d}.pt', map_location=device))
-            loaders = make_loaders(graphs, mp_idx, readout_idx, temporal, recipe, splits=('train', 'val'))
+            loaders = make_loaders(graphs, mp_idx, readout_idx, recipe, splits=('train', 'val'))
             metrics = {}
             for split in ('train', 'val'):
                 loader, feats = loaders[split]
@@ -1292,11 +1229,13 @@ def score_trial(operator, cfg, graphs, col_sets, node_dim, trial_dir, recipe, se
 
 def run_tuning_trial(operator, cfg, graphs, col_sets, node_dim, stage_dir, recipe, seeds, base_recipe=None,
                      mp_direction='in', temporal=False, eval_train_every=5, patience=10, min_epochs=20, reuse=None):
-    '''One trial = both seeds back to back, then the post-trial scoring; skipped when trial.json exists.
+    '''One trial = every seed back to back, then the post-trial scoring; skipped when trial.json exists.
 
-    reuse = the incumbent's trial dict: when the recipe is identical, its scoring is copied into this
-    stage (trial.json with `reused_from`) instead of training the same recipe again.
+    reuse = the incumbent's trial dict: when the recipe is identical, its scoring is copied into this stage
+    (trial.json with `reused_from`) instead of training the same recipe again. mp_direction / temporal are fixed
+    ('in' / False, see run_name).
     '''
+    assert mp_direction == 'in' and not temporal, 'only mp_direction="in" without temporal sampling is implemented'
     stage = os.path.basename(stage_dir)
     tag = recipe_tag(recipe, base_recipe)
     trial_dir = f'{stage_dir}/{tag}'
@@ -1316,9 +1255,8 @@ def run_tuning_trial(operator, cfg, graphs, col_sets, node_dim, stage_dir, recip
     seed_info = None
     for seed in seeds:
         seed_info = run_tuning_seed(operator, cfg, graphs, col_sets, node_dim, trial_dir, recipe, seed,
-                                    mp_direction, temporal, eval_train_every, patience, min_epochs)
-    return score_trial(operator, cfg, graphs, col_sets, node_dim, trial_dir, recipe, seeds, stage, seed_info,
-                       mp_direction, temporal)
+                                    eval_train_every, patience, min_epochs)
+    return score_trial(operator, cfg, graphs, col_sets, node_dim, trial_dir, recipe, seeds, stage, seed_info)
 
 
 def choose_winner(trials, incumbent_tag, min_gain=0.01):
@@ -1342,11 +1280,8 @@ def choose_winner(trials, incumbent_tag, min_gain=0.01):
 
 
 def trials_table(trials, winners=None):
-    '''One row per trial with every knob, best / stopped epochs, train & val F1 / PR-AUC (mean ± std), the gap and a winner flag.
-
-    Two-seed (Luo) trials add every section-4 metric (mean ± std and per seed, column <metric>_s<seed>), the status
-    (ok | diverged | oom) and the new knobs; older trial.json files fill the new columns with their v1 defaults.
-    '''
+    '''One row per trial: every knob, best / stopped epochs, train and val metrics (mean ± std, and per seed as
+    <metric>_s<seed> where trial.json has them), the gap, the status (ok | diverged | oom) and a winner flag.'''
     winners = winners or {}
     rows = []
     for t in trials:
@@ -1369,7 +1304,6 @@ def trials_table(trials, winners=None):
         row['thresholds'] = '/'.join(f"{t['thresholds'][str(s)]:.3f}" for s in t['seeds']) if 'thresholds' in t else ''
         row.update(params=t.get('params'), invariant_params=t.get('invariant_params'),
                    seconds_per_epoch=t.get('seconds_per_epoch'))
-        # Luo-tuning columns
         row.update(status=t.get('status', 'ok'), diverged_at=t.get('diverged_at'), residual=r['residual'],
                    readout_layers=r['readout_layers'], readout_width=r['readout_width'],
                    readout_width_used=r['readout_layers'] > 1, weight_decay=r['weight_decay'],
@@ -1460,20 +1394,18 @@ def process_rss_gb():
     return total / 2**30
 
 
-def probe_attempt(operator, cfg, graphs, col_sets, node_dim, recipe, n_warmup=3, n_timed=20, mp_direction='in',
-                  temporal=False, deg_hist=None, val_pass=True):
+def probe_attempt(operator, cfg, graphs, col_sets, node_dim, recipe, n_warmup=3, n_timed=20, deg_hist=None,
+                  val_pass=True):
     '''One probe attempt: warm-up + timed training batches, then (val_pass) one full val prediction pass.
 
     Returns GPU-only and wall-clock (sampling included) seconds per batch, peak allocated / reserved GPU memory and
-    peak CPU memory. Lives in its own function so that every tensor it made is freed once an out-of-memory error
-    has left it.
+    peak CPU memory. Its own function, so every tensor it made is freed once an out-of-memory error has left it.
     '''
     mp_idx, readout_idx = col_sets[cfg['mp']], col_sets[cfg['readout']]
     cuda = device.type == 'cuda'
     set_seed(SEED)
-    model = build_model(operator, node_dim, len(mp_idx), len(readout_idx), mp_direction == 'bidirectional',
-                        deg_hist, recipe)
-    loaders = make_loaders(graphs, mp_idx, readout_idx, temporal, recipe, splits=('train', 'val'))
+    model = build_model(operator, node_dim, len(mp_idx), len(readout_idx), deg_hist=deg_hist, recipe=recipe)
+    loaders = make_loaders(graphs, mp_idx, readout_idx, recipe, splits=('train', 'val'))
     train_loader, train_feats = loaders['train']
     r = full_recipe(recipe)
     criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([r['pos_weight']], device=device))
@@ -1516,7 +1448,7 @@ def probe_attempt(operator, cfg, graphs, col_sets, node_dim, recipe, n_warmup=3,
         out['val_peak_gb'] = torch.cuda.max_memory_allocated() / 2**30 if cuda else float('nan')
         out['val_peak_reserved_gb'] = torch.cuda.max_memory_reserved() / 2**30 if cuda else float('nan')
         out['epoch_estimate_s'] = out['train_epoch_s'] + out['val_predict_s']
-        # Luo tuning scores train AND val every epoch: one train pass + predictions on train and val
+        # an epoch that scores train AND val: one train pass + predictions on train and val
         out['epoch_wall_estimate_s'] = out['train_epoch_wall_s'] + out['val_predict_s'] * (1 + len(train_loader) / len(val_loader))
     out['peak_rss_gb'] = max(peak_rss, process_rss_gb())
     out['params'] = count_params(model)
@@ -1530,14 +1462,13 @@ def neighbour_candidates(depth):
 
 
 def probe_one(operator, cfg, graphs, col_sets, node_dim, recipe, depth, label, neighbours, deg_hist, n_warmup=3,
-              n_timed=20, mp_direction='in', temporal=False):
+              n_timed=20):
     '''One probe attempt at one depth and neighbour list; an out-of-memory error is recorded in the attempt, not raised.'''
     r = full_recipe(dict(recipe, num_layers=depth, num_neighbors=neighbours))
     attempt = {'list': label, 'neighbors': neighbours}
     print(f'--- probe: {depth} layers, {label} neighbours {neighbours}')
     try:   # running out of memory is the probe's answer, not a failure
-        attempt.update(probe_attempt(operator, cfg, graphs, col_sets, node_dim, r, n_warmup, n_timed, mp_direction,
-                                     temporal, deg_hist))
+        attempt.update(probe_attempt(operator, cfg, graphs, col_sets, node_dim, r, n_warmup, n_timed, deg_hist))
     except (torch.cuda.OutOfMemoryError, RuntimeError) as err:
         if not is_out_of_memory(err):
             raise
@@ -1556,20 +1487,21 @@ def probe_one(operator, cfg, graphs, col_sets, node_dim, recipe, depth, label, n
 
 def probe_depths(operator, cfg, graphs, col_sets, node_dim, recipe, depths, out_path, n_warmup=3, n_timed=20,
                  max_ratio=3.0, mp_direction='in', temporal=False, reference_seconds=None):
-    '''Memory / time probe per depth at the heaviest setting: warm-up + timed train batches, then one full val prediction pass.
+    '''Memory / time probe per depth at the heaviest setting (the one-pass tuning notebooks).
 
-    For each depth the primary neighbour list is tried first, then the fallback; a depth passes when
-    both fit in memory and its epoch estimate is <= max_ratio x the reference (the first depth probed,
-    or reference_seconds from an earlier probe). Returns {depth: {'neighbors': list or None, ...}} and
-    writes it to out_path (probe.json, with 'reference_seconds'). Used by the GIN / GATv2 tuning notebooks.
+    For each depth the primary neighbour list is tried first, then the fallback; a depth passes when it fits in
+    memory and its epoch estimate is <= max_ratio x the reference (the first depth probed, or reference_seconds
+    from an earlier probe). Returns {depth: {'neighbors': list or None, ...}} and writes it to out_path
+    (probe.json). mp_direction / temporal are fixed ('in' / False, see run_name).
     '''
+    assert mp_direction == 'in' and not temporal, 'only mp_direction="in" without temporal sampling is implemented'
     deg_hist = in_degree_histogram(graphs['train']) if operator == 'pna' else None
     results, base_epoch_seconds = {}, reference_seconds
     for depth in depths:
         results[depth] = {'neighbors': None, 'status': 'dropped', 'attempts': []}
         for label, neighbours in neighbour_candidates(depth):
             attempt = probe_one(operator, cfg, graphs, col_sets, node_dim, recipe, depth, label, neighbours, deg_hist,
-                                n_warmup, n_timed, mp_direction, temporal)
+                                n_warmup, n_timed)
             results[depth]['attempts'].append(attempt)
             if 'error' in attempt:
                 continue
@@ -1590,12 +1522,12 @@ def probe_depths(operator, cfg, graphs, col_sets, node_dim, recipe, depths, out_
 
 
 def probe_memory(operator, cfg, graphs, col_sets, node_dim, recipe, depths, out_path, mem_fraction=0.85):
-    '''Luo tuning probe: which depths fit in GPU memory at the heaviest setting (no time rule).
+    '''Memory probe of the Luo tuning: which depths fit in GPU memory at the heaviest setting (no time rule).
 
     A depth fits when nothing ran out of memory and the peak reserved GPU memory stays <= mem_fraction of the GPU
-    (the margin: 23 batches do not see the largest subgraph); the fallback list is tried when the primary does not
-    fit. The probe stops at the first depth that fits with neither list (memory never shrinks with depth).
-    probe.json is saved after every depth, and the depths already in it are skipped, so a killed probe resumes.
+    (the margin: the timed batches do not see the largest subgraph); the fallback list is tried when the primary
+    does not fit. The probe stops at the first depth that fits with neither list (memory never shrinks with depth).
+    probe.json is saved after every depth and the depths already in it are skipped, so a killed probe resumes.
     '''
     deg_hist = in_degree_histogram(graphs['train']) if operator == 'pna' else None
     cuda = device.type == 'cuda'
@@ -1627,7 +1559,7 @@ def probe_memory(operator, cfg, graphs, col_sets, node_dim, recipe, depths, out_
 
 
 def time_loader_workers(operator, cfg, graphs, col_sets, node_dim, recipe, depth_neighbours, settings=(0, 4, 6),
-                        n_warmup=3, n_timed=20, mp_direction='in', temporal=False):
+                        n_warmup=3, n_timed=20):
     '''Wall-clock seconds per training batch (sampling + step) and peak CPU memory for each loader worker count.
 
     depth_neighbours: {depth: neighbour list}. Returns {depth: {workers: {'wall_s_per_batch', 'peak_rss_gb'}}}.
@@ -1638,8 +1570,8 @@ def time_loader_workers(operator, cfg, graphs, col_sets, node_dim, recipe, depth
         out[str(depth)] = {}
         for workers in settings:
             r = full_recipe(dict(recipe, num_layers=depth, num_neighbors=neighbours, num_workers=workers))
-            numbers = probe_attempt(operator, cfg, graphs, col_sets, node_dim, r, n_warmup, n_timed, mp_direction,
-                                    temporal, deg_hist, val_pass=False)
+            numbers = probe_attempt(operator, cfg, graphs, col_sets, node_dim, r, n_warmup, n_timed, deg_hist,
+                                    val_pass=False)
             out[str(depth)][str(workers)] = {'wall_s_per_batch': numbers['train_wall_s_per_batch'],
                                              'peak_rss_gb': numbers['peak_rss_gb']}
             print(f"--- loader timing: {depth} layers, {workers} workers: {numbers['train_wall_s_per_batch']:.3f} s/batch, "
@@ -1666,8 +1598,7 @@ def save_recipe(path, operator, cfg, trial, retrain_seeds=(42, 43, 44, 45), extr
     '''recipe.json: the frozen knobs, best epoch, per-seed thresholds and the validation F1 that chose them.
 
     One threshold for every retrain seed: the mean of the tuning seeds' validation thresholds at the best epoch
-    (the per-seed tuning thresholds are kept in 'tuning_thresholds' for the record). `extra` is merged in
-    (Luo tuning: n_trials, select_metric, the winner's val PR-AUC, the last-10-epochs flag).
+    (the per-seed tuning thresholds are kept in 'tuning_thresholds' for the record). `extra` is merged in.
     '''
     tuned = {str(s): float(trial['thresholds'][str(s)]) for s in trial['seeds']}
     mean_threshold = float(np.mean(list(tuned.values())))
@@ -1701,10 +1632,9 @@ def load_recipe(path):
 
 
 def final_scoring(preds, threshold, transfer_threshold):
-    '''Metrics of a final run from its predictions: every split at `threshold` (the headline, that config's own
-    validation-chosen cut), the thresholded metrics at `transfer_threshold` (the tuned config's cut, secondary) and at the
-    threshold re-swept on the val rows (seen in training here, secondary), and the test sensitivity table.
-    transfer_threshold=None skips the transfer view (Luo tuning: every config is tuned, so there is no other cut).
+    '''Metrics of a final run from its predictions: every split at `threshold` (the headline), the thresholded metrics
+    at `transfer_threshold` (the tuned config's cut, secondary; None skips this view) and at the threshold re-swept
+    on the val rows (seen in training here, secondary), and the test sensitivity table.
     Returns (metrics, extra row fields, sensitivity rows).'''
     metrics = {split: compute_metrics(preds[split]['y'], preds[split]['prob'], threshold) for split in SPLITS}
     sensitivity = threshold_sensitivity(preds['test']['y'], preds['test']['prob'], threshold)
@@ -1742,10 +1672,10 @@ def run_threshold_selection(operator, cfg, graphs, col_sets, node_dim, out_root,
     mp_idx, readout_idx = col_sets[cfg['mp']], col_sets[cfg['readout']]
     set_seed(seed)
     deg_hist = in_degree_histogram(graphs['train']) if operator == 'pna' else None
-    model = build_model(operator, node_dim, len(mp_idx), len(readout_idx), mp_direction == 'bidirectional', deg_hist, recipe)
+    model = build_model(operator, node_dim, len(mp_idx), len(readout_idx), deg_hist=deg_hist, recipe=recipe)
     print_model_header(f'threshold selection {name} seed {seed} (train graph, {stop_epoch} epochs, frozen recipe)',
                        mp_idx, readout_idx, count_params(model), invariant_params(model), node_dim)
-    loaders = make_loaders(graphs, mp_idx, readout_idx, temporal, recipe, splits=('train', 'val'))
+    loaders = make_loaders(graphs, mp_idx, readout_idx, recipe, splits=('train', 'val'))
     history, _, _ = train_one_run(model, loaders, out_dir, recipe, stop_epoch=stop_epoch, eval_train_every=eval_train_every)
     last = history[-1]
     assert last['epoch'] == stop_epoch
@@ -1764,53 +1694,22 @@ def run_threshold_selection(operator, cfg, graphs, col_sets, node_dim, out_root,
 
 
 def save_config_thresholds(path, entries):
-    '''config_thresholds.json: {run: {threshold, source, ...}} — one validation-chosen cut per feature config.'''
+    '''config_thresholds.json: {run: {threshold, source, ...}}, one validation-chosen cut per feature config.'''
     json.dump(entries, open(path, 'w'), indent=2)
     print('config thresholds -> ' + path + ': ' + ', '.join(f"{k}={v['threshold']:.3f}" for k, v in entries.items()))
 
 
-def load_config_thresholds(path):
-    '''Read config_thresholds.json; every threshold must lie in (0, 1).'''
-    entries = json.load(open(path))
-    assert all(0 < v['threshold'] < 1 for v in entries.values())
-    return entries
-
-
-def rescore_final_run(out_dir, threshold, transfer_threshold):
-    '''Re-score a finished final run from its saved predictions.csv at a new headline threshold (the config's own cut):
-    rewrites results.json, sensitivity.csv and the pred column of predictions.csv. Returns the result row.'''
-    results = json.load(open(f'{out_dir}/results.json'))
-    table = pd.read_csv(f'{out_dir}/predictions.csv')
-    preds = {split: {'y': g['y'].to_numpy(), 'prob': g['prob'].to_numpy(dtype=np.float32)}
-             for split, g in table.groupby('split')}
-    metrics, extra, sensitivity = final_scoring(preds, threshold, transfer_threshold)
-    row = {k: v for k, v in results.items()
-           if k not in ('architecture', 'recipe', 'threshold_sensitivity', 'threshold_source')
-           and not k.startswith(('seen_', 'transfer_', 'frozen_'))}
-    row.update(flatten_metrics(metrics))
-    row.update(threshold=float(threshold), threshold_source='config', **extra)
-    save_run(out_dir, row, results['recipe'], extra={'threshold_sensitivity': sensitivity})
-    pd.DataFrame(sensitivity).to_csv(f'{out_dir}/sensitivity.csv', index=False)
-    table['pred'] = (table['prob'] >= threshold).astype(int)
-    table.to_csv(f'{out_dir}/predictions.csv', index=False)
-    print(f"re-scored {out_dir} at {threshold:.3f} (was {results['threshold']:.3f}): test F1 {metrics['test']['f1']:.4f}")
-    return row
-
-
 def run_final(operator, cfg, graphs, col_sets, node_dim, out_root, frozen, seed, mp_direction='in', temporal=False,
               node_enc='none', enc_dir=None, gfp_variant='v0', cfg_threshold=None, resume=False, eval_curves=False):
-    '''Final retrain of one seed: train+val graph, stop at the frozen epoch, every split scored once.
+    '''Final retrain of one seed: train + val graph, stop at the frozen epoch, every split scored once.
 
     The headline threshold is cfg_threshold (this config's validation-chosen cut, see run_threshold_selection) or,
     when None, the frozen tuning threshold. Writes <out_root>/<run>/seed-<s>/: results.json (+ phase, stop_epoch,
-    threshold_source, val_seen, and the secondary views: transfer_threshold / transfer_<split>_<f1|precision|recall>
-    at the tuned config's threshold, only when cfg_threshold is given, and val_seen_threshold / seen_<split>_<...> at
-    the threshold re-swept on the val rows, which were trained on here), history.csv, curves.png, sensitivity.csv,
-    predictions.csv, final.pt. results.json is written last, so it marks a finished run.
-    A finished run is skipped; if it was scored at another threshold and its predictions.csv is present it is
-    re-scored, otherwise its stored row is returned with a warning.
-    Luo tuning: resume=True continues a killed retrain from seed-<s>/resume.pt; eval_curves=True scores train and
-    val (seen) every epoch for the curves.
+    threshold_source, val_seen and the secondary views: transfer_* at the tuned config's threshold when cfg_threshold
+    is given, seen_* at the threshold re-swept on the val rows that were trained on here), history.csv, curves.png,
+    sensitivity.csv, predictions.csv, final.pt. results.json is written last, so it marks a finished run, and a
+    finished run is skipped. resume=True continues a killed retrain from seed-<s>/resume.pt; eval_curves=True
+    scores train and val (seen) every epoch for the curves.
     '''
     recipe, stop_epoch = frozen['recipe'], int(frozen['best_epoch'])
     frozen_threshold = float(frozen['thresholds'][str(seed)])
@@ -1820,13 +1719,7 @@ def run_final(operator, cfg, graphs, col_sets, node_dim, out_root, frozen, seed,
     out_dir = f'{out_root}/{name}/seed-{seed}'
     if os.path.exists(f'{out_dir}/results.json'):
         results = json.load(open(f'{out_dir}/results.json'))
-        if abs(float(results['threshold']) - threshold) > 1e-9:
-            if os.path.exists(f'{out_dir}/predictions.csv'):
-                return rescore_final_run(out_dir, threshold, transfer_threshold)
-            print(f"=== {name} seed {seed} === WARNING: finished at threshold {results['threshold']:.3f}, not "
-                  f"{threshold:.3f}; no predictions.csv here to re-score (do it locally with rescore_final_run)")
-        else:
-            print(f'=== {name} seed {seed} === already finished (results.json found), skipping')
+        print(f'=== {name} seed {seed} === already finished (results.json found), skipping')
         return {k: v for k, v in results.items() if k not in ('architecture', 'recipe', 'threshold_sensitivity')}
     os.makedirs(out_dir, exist_ok=True)
     mp_idx, readout_idx = col_sets[cfg['mp']], col_sets[cfg['readout']]
@@ -1835,13 +1728,12 @@ def run_final(operator, cfg, graphs, col_sets, node_dim, out_root, frozen, seed,
 
     set_seed(seed)
     deg_hist = in_degree_histogram(fit_graph) if operator == 'pna' else None   # the graph trained on
-    model = build_model(operator, node_dim, len(mp_idx), len(readout_idx), mp_direction == 'bidirectional',
-                        deg_hist, recipe)
+    model = build_model(operator, node_dim, len(mp_idx), len(readout_idx), deg_hist=deg_hist, recipe=recipe)
     n_params, n_invariant = count_params(model), invariant_params(model)
     print_model_header(f'{name} seed {seed} (train+val retrain, stop at epoch {stop_epoch}, threshold {threshold:.3f})',
                        mp_idx, readout_idx, n_params, n_invariant, node_dim)
-    fit_loader = make_loader(fit_graph, True, mp_idx, readout_idx, temporal, recipe)
-    eval_loaders = make_loaders(graphs, mp_idx, readout_idx, temporal, recipe, splits=('train', 'val')) if eval_curves else None
+    fit_loader = make_loader(fit_graph, True, mp_idx, readout_idx, recipe)
+    eval_loaders = make_loaders(graphs, mp_idx, readout_idx, recipe, splits=('train', 'val')) if eval_curves else None
     history = train_fixed_epochs(model, fit_loader, out_dir, recipe, stop_epoch,
                                  resume_path=f'{out_dir}/resume.pt' if resume else None, eval_loaders=eval_loaders)
     del fit_loader, fit_graph, eval_loaders
@@ -1849,11 +1741,10 @@ def run_final(operator, cfg, graphs, col_sets, node_dim, out_root, frozen, seed,
 
     # scoring: the three usual loaders (val is training data here), test once; headline = this config's threshold,
     # secondary = the tuned config's threshold and the seen-val sweep (PR-AUC, ROC-AUC and top-5 % do not move)
-    loaders = make_loaders(graphs, mp_idx, readout_idx, temporal, recipe)
+    loaders = make_loaders(graphs, mp_idx, readout_idx, recipe)
     _, preds = score_all_splits(model, loaders, graphs, threshold, seed)
     metrics, extra, sensitivity = final_scoring(preds, threshold, transfer_threshold)
-    row = result_row(name, operator, cfg, mp_direction, temporal, stop_epoch, threshold,
-                     n_params, n_invariant, metrics, node_enc, gfp_variant, seed)
+    row = result_row(name, operator, cfg, stop_epoch, threshold, n_params, n_invariant, metrics, node_enc, gfp_variant, seed)
     row.update(phase='retrain', trained_on='train+val', stop_epoch=stop_epoch,
                threshold_source='config' if cfg_threshold is not None else 'tuning', val_seen=True, **extra)
     transfer = '' if transfer_threshold is None else \
@@ -1874,7 +1765,7 @@ def run_final(operator, cfg, graphs, col_sets, node_dim, out_root, frozen, seed,
 
 
 # ==================================================================================================
-# Luo et al. (2024) tuning — random search per operator and config, two seeds per trial (EXPERIMENTS.md 2b);
+# Luo et al. (2024) tuning: random search per operator and config, two seeds per trial (EXPERIMENTS.md section 2b);
 # run on Cineca through cineca/ (probe.py, draw_trials.py, tune.py, aggregate.py, final.py)
 # ==================================================================================================
 
@@ -1885,7 +1776,7 @@ LUO_SPACE = {                          # Luo et al. 2024 section 4 + Tables 8-10
     'residual':       ['linear', 'none'],               # the paper's linear residual, or none
     'dropout':        [0.2, 0.3, 0.5, 0.7],
     'weight_decay':   [0.0, 5e-5, 5e-4, 1e-3, 1e-2],    # tunedGNN's run scripts (the paper's text names none)
-    'pos_weight':     [4.0, 8.0, 16.0],                 # ours (supervisor)
+    'pos_weight':     [4.0, 8.0, 16.0],                 # ours
     'readout_layers': [1, 2, 3],                        # ours: the paper does not tune the head
     'readout_width':  [0.5, 1.0, 2.0],                  # ours; drawn but unused when readout_layers = 1
 }
@@ -1899,7 +1790,7 @@ LUO_STAGE = 'luo2024'
 LUO_PROTOCOL = dict(epochs=LUO_MAX_EPOCHS, lr_schedule='constant', select_metric='pr_auc')
 LUO_HEAVIEST = dict(hidden=512, norm='batch', residual='linear', readout_layers=3, readout_width=2.0)   # probe setting
 LUO_MEM_FRACTION = 0.85                # a depth fits when its peak reserved GPU memory is <= 85 % of the GPU
-LOADER_WORKER_SETTINGS = (0, 4, 6)     # timed by the probe; non-persistent workers keep resume exact (checked 22 Oct)
+LOADER_WORKER_SETTINGS = (0, 4, 6)     # timed by the probe; non-persistent workers keep a resumed run exact
 
 
 def luo_recipe(knobs=None, num_layers=2, num_neighbors=None, num_workers=0):
@@ -1967,14 +1858,14 @@ def delete_trial_checkpoints(trial_dir, seeds, keep_best=True):
 
 
 def finalise_trial(operator, cfg, trial_dir, recipe, seeds=LUO_TUNING_SEEDS, stage=LUO_STAGE, extra=None):
-    '''Two-seed trial: once every seed has its done.json, write trial.json from the two histories (CPU only).
+    '''Once every seed has its done.json, write trial.json from the seeds' histories (CPU only).
 
-    Best epoch = argmax of the seed-mean val <select_metric> (raw, first epoch on ties) over the epochs both seeds
+    Best epoch = argmax of the seed-mean val <select_metric> (raw, first epoch on ties) over the epochs every seed
     reached; per-seed metrics and thresholds = that history row (score_trial from_history). That epoch's checkpoint
-    becomes seed-<s>/best.pt, every other checkpoint and resume.pt is deleted, the per-seed curves are re-drawn at
-    the trial's epoch and curves.png shows the seed means; trial.json is written last. A seed that ran out of
-    memory, or stopped before its first epoch, leaves a trial without metrics ('oom' / 'diverged', cannot win).
-    Returns the trial dict, or None while a seed is not done. Rerunning it after an interruption is safe; two
+    becomes seed-<s>/best.pt, every other checkpoint and resume.pt is deleted, the curves are re-drawn at the
+    trial's epoch (per seed, and the seed means), trial.json is written last. A seed that ran out of memory, or
+    stopped before its first epoch, leaves a trial without metrics ('oom' / 'diverged', cannot win).
+    Returns the trial dict, or None while a seed is not done. Rerunning after an interruption is safe; two
     processes at once are not (cineca/tune.py lets only one finalise a trial).
     '''
     tag = os.path.basename(trial_dir)

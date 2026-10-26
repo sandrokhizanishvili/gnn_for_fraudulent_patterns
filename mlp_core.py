@@ -1,10 +1,10 @@
 '''Shared code for the MLP cross-check: a plain neural net on the same 93 inputs as the GBT, no message passing.
 
-The matrix, the split views and the predictions file come from gbt_core; the threshold sweep, the seven
-metrics, the loss diagnostic, the curves and the summaries from gnn_core — nothing is copied, so MLP, GBT
-and GNN rows are comparable by construction. This file adds only the MLP parts: the input scaling, the
-three shapes (flat, funnel, resnet), one training loop with early stopping on validation PR-AUC, the
-random search and the final seeds, saved with the conventions of CLAUDE.md §6.
+The matrix, the split views and the predictions file come from gbt_core; the threshold sweep, the seven metrics,
+the loss diagnostic, the curves and the summaries from gnn_core, so MLP, GBT and GNN rows are comparable by
+construction. This file adds the MLP parts: the input scaling, the three shapes (flat, funnel, resnet), one
+training loop with early stopping on validation PR-AUC, the random search and the final seeds, saved with the
+result files of CLAUDE.md section 6.
 '''
 import gc
 import json
@@ -20,7 +20,7 @@ from sklearn.metrics import average_precision_score, f1_score, roc_auc_score
 import gnn_core as core
 import gbt_core
 
-# ---------------- fixed recipe of the cross-check (EXPERIMENTS.md appendix) — never tuned per run ----------------
+# ---------------- fixed recipe of the cross-check (EXPERIMENTS.md appendix), never tuned per run ----------------
 SEEDS         = (42, 43, 44, 45)   # final models; 42 is the run compared with the single-seed GNN runs
 SEARCH_SEEDS  = (42,)              # one seed per search trial; the trial score is its best validation PR-AUC
 N_TRIALS      = 100                # trial 0 = DEFAULT_KNOBS, the rest drawn from SEARCH_SPACE
@@ -272,7 +272,7 @@ def random_search(data, X, y, out_dir, n_trials=N_TRIALS, seeds=SEARCH_SEEDS):
             del model
             gc.collect()
 
-    # the winner: highest val PR-AUC (mean over the search seeds) among the trials with every seed done, tie-break val F1, then lower id
+    # winner: highest mean val PR-AUC among the trials with every seed done; tie-break val F1, then the lower id
     scores = trials.groupby('trial').agg(val_pr_auc=('val_pr_auc', 'mean'), val_f1=('val_f1', 'mean'),
                                          n_seeds=('seed', 'count')).reset_index()
     scores = scores[scores['n_seeds'] == len(seeds)]

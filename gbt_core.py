@@ -1,11 +1,10 @@
 '''Shared code for the GBT cross-check: LightGBM on the same inputs as the GNNs, no message passing.
 
-Everything that is "how a number is computed" (threshold sweep, the seven metrics, the loss
-diagnostic, the curves, the batch summary) is imported from gnn_core so GBT and GNN rows are
-comparable by construction. This file adds only the GBT-specific parts: the 93-column row built
-from the graph files, the successive-halving search (Altman et al. 2023, Appendix C) with early
-stopping on the weighted validation loss, the final fits with boosting-round checkpoints, and the
-saving conventions of CLAUDE.md §6.
+How a number is computed (threshold sweep, the seven metrics, the loss diagnostic, the curves, the batch
+summary) is imported from gnn_core, so GBT and GNN rows are comparable by construction. This file adds the
+GBT-specific parts: the 93-column row built from the graph files, the successive-halving search (Altman et al.
+2023, Appendix C) with early stopping on the weighted validation loss, the final fits with boosting-round
+checkpoints, the result files of CLAUDE.md section 6, and the tail-window side check at the end.
 '''
 import gc
 import json
@@ -20,25 +19,24 @@ from sklearn.metrics import average_precision_score, f1_score, roc_auc_score
 
 import gnn_core as core
 
-# ---------------- fixed recipe of the cross-check (EXPERIMENTS.md appendix) — never tuned per run ----------------
+# ---------------- fixed recipe of the cross-check (EXPERIMENTS.md appendix), never tuned per run ----------------
 SEEDS        = (42, 43, 44, 45)       # final models; 42 is the run compared with the single-seed GNN runs
 X0, ETA, R0  = 100, 2, 0.1            # successive halving: start configs, keep 1/ETA per round, first train fraction
 CHECK_EVERY  = 25                     # boosting rounds between validation checkpoints of a final fit
-THREADS      = os.cpu_count()          # all logical cores (16 on the thesis laptop)
+THREADS      = os.cpu_count()          # all logical cores
 FEATURE_SET  = 'full'                 # the only readout set of the GBT: all 81 edge + 6 + 6 node columns
-N_EDGES, N_TRAIN, N_VAL_END = 5_077_237, 3_046_342, 4_061_789   # Progress_Report.md §4
+N_EDGES, N_TRAIN, N_VAL_END = 5_077_237, 3_046_342, 4_061_789   # Progress_Report.md section 4
 POSITIVES    = {'train': 2_297, 'val': 1_082, 'test': 1_143}
 PAPER_THRESHOLD = 0.5                 # the paper's decision rule, stored for comparison only
 
-# early stopping: every fit (search trial or final seed) stops when LightGBM's binary_logloss on the
-# validation Dataset (laundering rows weighted POS_WEIGHT = the minimum of gnn_core.weighted_bce, the
-# loss the curves show) has not improved for EARLY_STOPPING rounds and keeps its lowest-loss round;
-# search trials are ranked by SELECT at that round (threshold-free)
+# every fit stops when LightGBM's binary_logloss on the validation Dataset (laundering rows weighted POS_WEIGHT,
+# so its minimum is gnn_core.weighted_bce's) has not improved for EARLY_STOPPING rounds and keeps its lowest-loss
+# round; search trials are ranked by SELECT at that round (threshold-free)
 EARLY_STOPPING = 100
 SELECT         = 'val_pr_auc'
 
 # search space (name: low, high, how to sample): small trees, many rows per leaf, strong L2, slow learning;
-# num_round is only a cap — early stopping decides the kept round
+# num_round is only a cap, early stopping decides the kept round
 SEARCH_SPACE = {
     'num_round':        (2000, 2000,  'int'),
     'num_leaves':       (7,    63,    'int'),
@@ -337,10 +335,11 @@ def train_final(params, data, seed, out_root, check_every=CHECK_EVERY):
     X_val, y_val = split_arrays(data, 'val')
     num_round = params['num_round']
     checkpoints = set(range(check_every, num_round, check_every)) | {num_round}
-    history, clock = [], {'t0': time.time()}
+    history, last_time = [], time.time()
 
     def score_round(booster, k):
         '''One history row at round k (train / val loss, F1 at the val threshold, PR-AUC, ROC-AUC).'''
+        nonlocal last_time
         p_train = predict_booster(booster, X_train, k)
         p_val = predict_booster(booster, X_val, k)
         threshold, val_f1 = core.best_f1_threshold(y_val, p_val)
@@ -354,12 +353,13 @@ def train_final(params, data, seed, out_root, check_every=CHECK_EVERY):
             'val_pr_auc':   float(average_precision_score(y_val, p_val)),
             'val_roc_auc':  float(roc_auc_score(y_val, p_val)),
             'threshold':    threshold,
-            'seconds':      time.time() - clock['t0'],
+            'seconds':      time.time() - last_time,
         }
-        clock['t0'] = time.time()
+        last_time = time.time()
         return row
 
     def checkpoint(env):
+        '''LightGBM callback: score the booster at every checkpoint round.'''
         k = env.iteration + 1
         if k not in checkpoints:
             return
@@ -412,14 +412,13 @@ def seed_summary(rows, out_root, filename='seed_summary_gbt.csv'):
 
 
 # ==================================================================================================
-# SIDE CHECK, OUTSIDE THE PROTOCOL — the test window including the tail days the pipeline removed
+# SIDE CHECK, OUTSIDE THE PROTOCOL: the test window including the tail days the pipeline removed
 # ==================================================================================================
-# The thesis keeps Timestamp < 2022-09-11 (Progress_Report.md §1): the 8 later days of HI-Small hold
-# 1,108 transactions of which 655 are laundering (pattern completions only). The paper's released split
-# code keeps those days in its test window (days 8-17 of the file = 9-18 Sep). This check rebuilds the
-# 93 features of the tail rows with the Data_preparation recipes, self-checks the recipes on the 10 Sep
-# rows against the stored features, and scores the finished boosters — nothing is trained or chosen here;
-# the numbers measure the size of the window effect and do not enter any comparison.
+# The thesis keeps Timestamp < 2022-09-11 (Progress_Report.md section 1); the 8 later days hold 1,108
+# transactions, 655 of them laundering (pattern completions only), and the paper's released split code keeps
+# them in its test window (9-18 Sep). This check rebuilds the 93 features of the tail rows with the
+# Data_preparation recipes, self-checks the recipes on the 10 Sep rows against the stored features, and scores
+# the finished boosters. Nothing is trained or chosen here; the numbers enter no comparison.
 TAIL_START, PAPER_TEST_START = '2022-09-11', '2022-09-09'
 RAW_COLS = ['Timestamp', 'src_bank', 'src_account', 'dst_bank', 'dst_account', 'Amount Received',
             'Receiving Currency', 'Amount Paid', 'Payment Currency', 'Payment Format', 'label']
@@ -452,12 +451,11 @@ def _normalise_gfp(frame, scaler):
 def build_tail_matrix(data_dir='Data', log=print):
     '''The 93-column matrix of the tail rows (Timestamp >= TAIL_START), rebuilt from the raw file.
 
-    Baseline features follow Data_preparation (FX rates recovered from the stored 10 Sep Amount_Log, bank
-    risk frozen at the train-window rate); the GFP block is streamed causally in WSL (batch GFP_BATCH,
-    24 h windows) from the batch boundary before PAPER_TEST_START, so every tail row sees its full
-    window; then the train-fit normalisation and the entity one-hots. Self-checks on the 10 Sep rows
-    (which are in both the stream and the stored files) are returned in checks. Returns a dict with
-    X, y, timestamps (datetime64[s]) and checks.
+    Baseline features follow Data_preparation (FX rates recovered from the stored 10 Sep Amount_Log, bank risk
+    frozen at the train-window rate); the GFP block is streamed causally in WSL (batch GFP_BATCH, 24 h windows)
+    from the batch boundary before PAPER_TEST_START, so every tail row sees its full window; then the train-fit
+    normalisation and the entity one-hots. Returns a dict with X, y, timestamps (datetime64[s]) and the
+    self-checks on the 10 Sep rows (which are in both the stream and the stored files).
     '''
     import pickle
     import shutil
