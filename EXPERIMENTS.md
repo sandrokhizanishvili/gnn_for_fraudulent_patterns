@@ -522,13 +522,6 @@ Same decision rule as for GIN: nothing is chosen on test; configs 4, 5 and 6 reu
 
 *Newest first. Unticked = in progress · ticked = finished and synced.*
 
-- [ ] **27 Oct** — `cineca/` simplified from 23 files to seven (`config.sh` + untracked `config.local.sh`, `env.sh`,
-      `environment.yml`, `run.sh`, `job.sbatch`, `luo.py`, `README_LORIS.md`) after Loris asked for code and
-      configuration by `git pull` and a conda environment; the pip path, the four per-step job scripts, the eight
-      per-step Python files and the laptop hand-off scripts are gone; `.gitattributes` forces LF, `logs/` ignored;
-      `CODE_GUIDE.md` added (big picture + every function of every `.py`). Local end-to-end run on a cumulative slice
-      with fake SLURM: check, probe, status, draw and tune passed before the push; aggregate, final, pack still running
-      (ticked when they pass). Data to Loris as `handoff_data.tar.gz` on Drive (same content as 23 Oct).
 - [x] **24 Oct** — MLP cross-check finished in one Kaggle T4 session (notebook `sandrokh/notebook12baf08d19`, 9 h search +
       4 final seeds); output pulled with the Kaggle CLI into `Outputs/MLP/` (small files committed; `best.pt`,
       `predictions.csv` local); `Progress_Report.md` §7.13 written, MLP row added to the §7.7 comparison, README summary
