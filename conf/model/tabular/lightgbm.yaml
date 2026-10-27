@@ -1,0 +1,2 @@
+_target_: gnn_frauds.model.tabular.lightgbm.LightGBM
+name: lightgbm

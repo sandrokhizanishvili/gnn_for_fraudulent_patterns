@@ -1,7 +1,13 @@
 # CODE_GUIDE — what the code does, file by file
 
-Part A is the big picture; Part B lists every function of every `.py` file. Numbers are in `Progress_Report.md`,
+Part A is the big picture; Part B lists every function. Numbers are in `Progress_Report.md`,
 rules in `EXPERIMENTS.md`; those two stay the sources of truth.
+
+The code lives in the folder `gnn-frauds/` (import name `gnn_frauds`). `conf/` holds the Hydra configs.
+`gnn_core.py`, `gbt_core.py` and `mlp_core.py` re-export that package, so the old notebooks keep working.
+One command runs a model: `python -m gnn_frauds model=gnns/gin features=cfg5 hyperparameters=gnns/v1 optimization=none experiment=train paths=local`.
+`hyperparameters=gnns/v1` is the fixed architecture (`recipe=None`). Knob values are only in `conf/hyperparameters/`;
+how a search draws them is only in `conf/optimization/`.
 
 ## Part A — the big picture
 
@@ -52,10 +58,11 @@ is the table the report copies.
 
 | Group | Files | Status |
 |---|---|---|
-| Shared library | `gnn_core.py` | live |
+| Shared library | `gnn-frauds/` (import `gnn_frauds`); `gnn_core.py` re-exports it | live |
 | Main grid | `GIN_`, `PNA_`, `GAT_`, `TRANSFORMER_fixed_architecture.ipynb` (differ only in `OPERATOR`) | live |
 | Variants | `RWPE_fixed_architecture.ipynb` (+ `RWPE_encoding.ipynb`, `rwpe_compute.py`); `GFP_fixed_architecture.ipynb` (+ `GFP_experiments.ipynb`) | live |
 | Cross-checks without message passing | `GBT_fixed_features.ipynb` (`gbt_core.py`), `MLP_fixed_features.ipynb` (`mlp_core.py`); `Typology_analysis.ipynb` breaks detections down by laundering pattern | live |
+| One command | `Run_benchmark.ipynb`, `python -m gnn_frauds`, `conf/` | live |
 | Tuning, current | `cineca/` — Luo et al. (2024) random search, 100 trials × 2 seeds per operator and config 2 / 4, then a 5-seed retrain (`EXPERIMENTS.md` §2b, `cineca/README_LORIS.md`) | live |
 | Tuning, old | `GIN_tuning*`, `GAT_tuning*`, `Outputs/TUNING/`, `Outputs/FINAL/` | **superseded**, kept for the record |
 | Other | `Outputs/` (every finished run), `Data/` (not versioned), `thesis/`, `Presentation/`, `Papers/` | — |
@@ -68,7 +75,9 @@ then in `gnn_core.py`: `load_graphs`, `EdgeClassifier`, `MPLayer`, `make_conv`, 
 
 ### gnn_core.py
 
-The library behind every GNN result. Entry points and what they call:
+The root file re-exports `gnn_frauds`. The functions below live in `gnn-frauds/` (`model/gnns/classifier.py`,
+`experiment/train.py`, `experiment/metrics.py`, `experiment/final.py`, `optimization/luo.py`, `dataset/hi_small.py`).
+Entry points and what they call:
 
 ```
 notebook         → run_experiment → build_model, make_loaders, train_one_run, score_all_splits, save_run
@@ -128,9 +137,12 @@ by the tuning; every long job can die and resume (`resume.pt`, atomic writes, sk
 
 ### gbt_core.py — LightGBM cross-check
 
+The root file re-exports `gnn_frauds.model.tabular.lightgbm`. The ranges are `conf/hyperparameters/lightgbm/v1.yaml`;
+the halving schedule is `conf/optimization/halving.yaml`.
 Same 93 inputs as the GNN readout (81 edge columns + the entity one-hots of sender and receiver), no message passing.
 Metrics, threshold sweep, curves and summaries are imported from `gnn_core`. Called by `GBT_fixed_features.ipynb`:
-`load_gbt_data → successive_halving → train_final × 4 seeds → seed_summary`, plus the `tail_check` appendix.
+`load_gbt_data → successive_halving → train_final × 4 seeds → seed_summary`. The tail appendix is
+`gnn-frauds/model/tabular/tail.py`, re-exported here so the notebook still calls `gbt_core.tail_check`.
 
 | Function | What it does |
 |---|---|
@@ -141,10 +153,20 @@ Metrics, threshold sweep, curves and summaries are imported from `gnn_core`. Cal
 | `run_name_gbt`, `gbt_result_row`, `save_gbt_run`, `save_gbt_predictions` | Name; flat row (`params` = trees, `invariant_params` = 0); `results.json` incl. F1 at the paper's 0.5; `predictions.csv` in the GNN layout. |
 | `train_final` | **One final seed**: fit, score train / val every 25 rounds, keep the lowest-val-loss round, sweep the threshold there, test once; `results.json`, `history.csv`, `curves.png`, `best.txt`. |
 | `seed_summary` | `gnn_core.seed_summary` under the GBT file name. |
-| `_normalise_gfp`, `build_tail_matrix`, `tail_check` | **Appendix, outside the protocol**: rebuild the 93 features of the eight tail days the dataset cut removed (baseline recipe, causal GFP stream in WSL, train-fit normalisation), self-check against stored Sep 10 rows, score the finished boosters on four windows. Nothing is chosen on these numbers. |
+
+### `gnn-frauds/model/tabular/tail.py` — tail window, outside the protocol
+
+Re-exported by `lightgbm.py` (and so by `gbt_core`). Rebuilds the 93 features of the eight tail days the dataset
+cut removed and scores the finished boosters. Nothing is chosen on these numbers.
+
+| Function | What it does |
+|---|---|
+| `_normalise_gfp`, `build_tail_matrix`, `tail_check` | Train-fit GFP normalisation; the tail matrix (baseline recipe, causal GFP stream in WSL, entity one-hots), self-check against stored Sep 10 rows; four windows at each seed's validation threshold → `tail_check.csv`. |
 
 ### mlp_core.py — MLP cross-check
 
+The root file re-exports `gnn_frauds.model.tabular.mlp`. The fixed point and the choice lists are
+`conf/hyperparameters/mlp/v1.yaml`; the draw settings are `conf/optimization/random.yaml`.
 A plain neural net on the GBT matrix: separates "it is a neural net" from "it uses the graph". Called by
 `MLP_fixed_features.ipynb`: `gbt_core.load_gbt_data → standardise → to_tensors → random_search → train_final × 4 → seed_summary`.
 

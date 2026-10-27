@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gnn-frauds"
+version = "0.1.0"
+description = "Benchmark graph and tabular models on transaction fraud"
+requires-python = ">=3.11"
+dependencies = ["hydra-core==1.3.2"]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools]
+packages = [
+    "gnn_frauds",
+    "gnn_frauds.dataset",
+    "gnn_frauds.preprocessing",
+    "gnn_frauds.model",
+    "gnn_frauds.model.gnns",
+    "gnn_frauds.model.tabular",
+    "gnn_frauds.features",
+    "gnn_frauds.hyperparameters",
+    "gnn_frauds.hyperparameters.gnns",
+    "gnn_frauds.hyperparameters.lightgbm",
+    "gnn_frauds.hyperparameters.mlp",
+    "gnn_frauds.optimization",
+    "gnn_frauds.experiment",
+]
+package-dir = {"gnn_frauds" = "gnn-frauds"}

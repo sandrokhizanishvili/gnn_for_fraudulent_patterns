@@ -1,0 +1,19 @@
+fixed:
+  hidden: 128
+  num_layers: 2
+  dropout: 0.3
+  norm: none
+  ffn: false
+  num_neighbors: [100, 100]
+  batch_size: 8192
+  epochs: 20
+  lr: 0.001
+  weight_decay: 1.0e-5
+  pos_weight: 8.0
+  self_loops: true
+  residual: identity
+  readout_layers: 2
+  readout_width: 1.0
+  lr_schedule: cosine
+  num_workers: 0
+  select_metric: f1

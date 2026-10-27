@@ -1,0 +1,20 @@
+defaults:
+  - dataset: hi_small
+  - preprocessing/node_embedding: none
+  - preprocessing/gfp: v0
+  - model: gnns/gin
+  - features: cfg2
+  - hyperparameters: gnns/v1
+  - optimization: none
+  - experiment: train
+  - paths: local
+  - _self_
+
+seed: 42
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
+  job:
+    chdir: false

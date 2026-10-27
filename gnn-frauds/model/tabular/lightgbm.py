@@ -1,0 +1,435 @@
+'''Shared code for the GBT cross-check: LightGBM on the same inputs as the GNNs, no message passing.
+
+How a number is computed (threshold sweep, the seven metrics, the loss diagnostic, the curves, the batch
+summary) is imported from gnn_core, so GBT and GNN rows are comparable by construction. This file adds the
+GBT-specific parts: the 93-column row built from the graph files, the successive-halving search (Altman et al.
+2023, Appendix C) with early stopping on the weighted validation loss, the final fits with boosting-round
+checkpoints, and the result files of CLAUDE.md section 6. The tail-window side check lives in tail.py and is
+re-exported here, so gbt_core.tail_check stays the notebook's name.
+'''
+import gc
+import json
+import os
+import time
+
+import lightgbm as lgb
+import numpy as np
+import pandas as pd
+import torch
+from sklearn.metrics import average_precision_score, f1_score, roc_auc_score
+
+import gnn_frauds.api as core
+import yaml
+
+from gnn_frauds.hyperparameters.gnns import conf_file
+from gnn_frauds.hyperparameters.lightgbm import load as _load_lgb
+from gnn_frauds.model.tabular.tail import build_tail_matrix, tail_check  # noqa: F401  re-exported for gbt_core
+
+# ---------------- fixed recipe of the cross-check (EXPERIMENTS.md appendix), never tuned per run ----------------
+SEARCH_SPACE, FIXED_PARAMS, FIXED_POINT = _load_lgb()
+_halving = yaml.safe_load(conf_file('optimization/halving.yaml').read_text(encoding='utf-8'))
+SEEDS        = tuple(int(s) for s in _halving['final_seeds'])
+X0, ETA, R0  = int(_halving['n_configs']), int(_halving['eta']), float(_halving['first_fraction'])
+CHECK_EVERY  = int(_halving['check_every'])
+THREADS      = os.cpu_count()
+EARLY_STOPPING = int(_halving['early_stopping'])
+SELECT         = _halving['select']
+FEATURE_SET  = 'full'                 # the only readout set of the GBT: all 81 edge + 6 + 6 node columns
+N_EDGES, N_TRAIN, N_VAL_END = 5_077_237, 3_046_342, 4_061_789   # Progress_Report.md section 4
+POSITIVES    = {'train': 2_297, 'val': 1_082, 'test': 1_143}
+PAPER_THRESHOLD = 0.5                 # the paper's decision rule, stored for comparison only
+
+DATASET_PARAMS = {'feature_pre_filter': False}   # lets one constructed Dataset serve trials with different min_data_in_leaf
+TRIAL_COLS = ['trial', 'round', 'fraction', 'n_rows', 'val_f1', 'threshold', 'val_pr_auc', 'rounds', 'seconds', 'params']
+
+
+# ==================================================================================================
+# data: one row per edge, built from the graph files
+# ==================================================================================================
+
+def load_gbt_data(data_dir):
+    '''The GBT matrix: edge_attr (81) || x[src] (6) || x[dst] (6) for every edge, plus labels and ids.
+
+    Features, src/dst, time come from test_graph.pt (all edges, time order); the labels of the train
+    and val windows come from their own snapshots (context edges carry -1). Returns a dict with
+    X, y, edge_id, src, dst, edge_time, cols, rows {split: slice}.
+    '''
+    meta = json.load(open(f'{data_dir}/feature_meta.json'))
+    edge_cols, node_cols = meta['EDGE_FEAT_COLS'], meta['NODE_FEAT_COLS']
+    assert len(edge_cols) == 81 and len(node_cols) == 6
+    rows = {'train': slice(0, N_TRAIN), 'val': slice(N_TRAIN, N_VAL_END), 'test': slice(N_VAL_END, N_EDGES)}
+
+    # labels: each snapshot carries the true label only on its evaluated rows
+    y = np.full(N_EDGES, -1, dtype=np.int64)
+    for split in ('train', 'val'):
+        graph = torch.load(f'{data_dir}/{split}_graph.pt', weights_only=False)
+        eval_rows = graph.eval_mask.nonzero().squeeze(1).numpy()
+        assert eval_rows[0] == rows[split].start and eval_rows[-1] == rows[split].stop - 1
+        y[rows[split]] = graph.y[eval_rows].numpy()
+        del graph
+        gc.collect()
+
+    graph = torch.load(f'{data_dir}/test_graph.pt', weights_only=False)
+    n_edges = graph.edge_index.shape[1]
+    assert n_edges == N_EDGES and int(n_edges * 0.6) == N_TRAIN and int(n_edges * 0.8) == N_VAL_END
+    assert graph.edge_attr.shape[1] == len(edge_cols) and graph.x.shape[1] == len(node_cols)
+    eval_rows = graph.eval_mask.nonzero().squeeze(1).numpy()
+    assert eval_rows[0] == N_VAL_END and len(eval_rows) == N_EDGES - N_VAL_END
+    y[rows['test']] = graph.y[eval_rows].numpy()
+    assert (y >= 0).all(), 'every edge must carry a 0/1 label'
+
+    src, dst = graph.edge_index[0].numpy(), graph.edge_index[1].numpy()
+    x = graph.x.numpy().astype(np.float32)
+    X = np.empty((n_edges, len(edge_cols) + 2 * len(node_cols)), dtype=np.float32)
+    X[:, :81] = graph.edge_attr.numpy()
+    X[:, 81:87] = x[src]
+    X[:, 87:93] = x[dst]
+    assert not np.isnan(X).any()
+    cols = edge_cols + [f'src_{c}' for c in node_cols] + [f'dst_{c}' for c in node_cols]
+    data = {'X': X, 'y': y, 'edge_id': np.arange(n_edges), 'src': src, 'dst': dst,
+            'edge_time': graph.edge_time.numpy(), 'cols': cols, 'rows': rows}
+    del graph, x
+    gc.collect()
+
+    print(f'GBT matrix {X.shape} float32 ({X.nbytes / 2**30:.2f} GB): {len(edge_cols)} edge + '
+          f'{len(node_cols)} src + {len(node_cols)} dst columns')
+    for split, rows_ in rows.items():
+        n_pos = int(y[rows_].sum())
+        assert n_pos == POSITIVES[split], f'{split}: {n_pos} laundering rows, expected {POSITIVES[split]}'
+        print(f'{split:<5} rows {rows_.start:>9,} – {rows_.stop - 1:>9,}  n={rows_.stop - rows_.start:,}  '
+              f'laundering={n_pos:,} ({n_pos / (rows_.stop - rows_.start):.4%})')
+    return data
+
+
+def split_arrays(data, split):
+    '''(X, y) of one split, as views on the full matrix.'''
+    rows = data['rows'][split]
+    return data['X'][rows], data['y'][rows]
+
+
+# ==================================================================================================
+# LightGBM wrappers
+# ==================================================================================================
+
+def sample_params(rng, space=SEARCH_SPACE):
+    '''One random configuration from the search space (ints uniform, floats uniform, log ranges log-uniform).'''
+    params = {}
+    for name, (low, high, kind) in space.items():
+        if kind == 'int':
+            params[name] = int(rng.integers(low, high + 1))
+        elif kind == 'log':
+            params[name] = float(10 ** rng.uniform(np.log10(low), np.log10(high)))
+        else:
+            params[name] = float(rng.uniform(low, high))
+    return params
+
+
+def make_dataset(X, y):
+    '''A constructed LightGBM Dataset (binned once, reused by every fit on the same rows).'''
+    return lgb.Dataset(X, label=y, params=dict(DATASET_PARAMS), free_raw_data=False).construct()
+
+
+def make_val_dataset(X_val, y_val, train_dataset):
+    '''The validation Dataset for early stopping: laundering rows weighted by POS_WEIGHT, so LightGBM's
+    binary_logloss on it has the same minimum as gnn_core.weighted_bce (the loss the curves show).'''
+    weight = np.where(y_val == 1, core.POS_WEIGHT, 1.0)
+    return lgb.Dataset(X_val, label=y_val, weight=weight, reference=train_dataset, params=dict(DATASET_PARAMS),
+                       free_raw_data=False).construct()
+
+
+def fit_booster(params, dataset, val_dataset, seed, callbacks=None):
+    '''lgb.train with the fixed recipe + one sampled configuration, early stopping on the weighted
+    validation logloss (patience EARLY_STOPPING); num_round (from params) is the cap.
+    booster.best_iteration is the round with the lowest validation loss.'''
+    lgb_params = dict(FIXED_PARAMS)
+    lgb_params.update({k: v for k, v in params.items() if k != 'num_round'})
+    lgb_params.update(DATASET_PARAMS)
+    lgb_params['seed'] = seed
+    lgb_params['metric'] = 'binary_logloss'
+    callbacks = list(callbacks or []) + [lgb.early_stopping(EARLY_STOPPING, first_metric_only=True, verbose=False)]
+    return lgb.train(lgb_params, dataset, num_boost_round=params['num_round'], valid_sets=[val_dataset],
+                     callbacks=callbacks)
+
+
+def predict_booster(booster, X, num_iteration=None):
+    '''Probabilities of the positive class from the first num_iteration trees (all if None).'''
+    return booster.predict(X, num_iteration=num_iteration, num_threads=THREADS).astype(np.float32)
+
+
+# ==================================================================================================
+# successive halving (Altman et al. 2023, Appendix C) — train rows only, scored on validation
+# ==================================================================================================
+
+def halving_schedule(x0, eta, r0):
+    '''[(configs alive, train fraction)] per round: x0 @ r0, x0/eta @ r0*eta, ... until the fraction is 1.'''
+    rounds, n_alive, fraction = [], x0, r0
+    while True:
+        rounds.append((n_alive, min(fraction, 1.0)))
+        if fraction >= 1.0 or n_alive // eta < 1:
+            break
+        n_alive, fraction = n_alive // eta, fraction * eta
+    return rounds
+
+
+def successive_halving(data, out_dir, x0=X0, eta=ETA, r0=R0, seed=core.SEED):
+    '''Pick the LightGBM configuration: random configs, each round keeps the best 1/eta on more train rows.
+
+    Every round fits on the most recent `fraction` of the train rows with early stopping on the
+    weighted validation loss and scores the full validation set at the kept round (test is never
+    touched); trials are ranked by SELECT (validation PR-AUC). One line per (trial, round) goes to
+    <out_dir>/trials.csv as soon as it finishes, so a stopped search resumes where it was. Returns
+    (best params, trials table); best = highest SELECT of the last round, ties -> lower trial id.
+    '''
+    os.makedirs(out_dir, exist_ok=True)
+    rng = np.random.default_rng(seed)
+    configs = {trial: sample_params(rng) for trial in range(x0)}
+    config_path = f'{out_dir}/configs.json'
+    if os.path.exists(config_path):
+        saved = {int(k): v for k, v in json.load(open(config_path)).items()}
+        assert saved == configs, 'configs.json does not match the seeded sample; delete the search folder to restart'
+    else:
+        json.dump(configs, open(config_path, 'w'), indent=1)
+
+    log_path = f'{out_dir}/trials.csv'
+    trials = pd.read_csv(log_path) if os.path.exists(log_path) else pd.DataFrame(columns=TRIAL_COLS)
+    X_train, y_train = split_arrays(data, 'train')
+    X_val, y_val = split_arrays(data, 'val')
+    n_train = len(y_train)
+    schedule = halving_schedule(x0, eta, r0)
+    print(f'successive halving: x0={x0} eta={eta} r0={r0} -> rounds {schedule} | ranked by {SELECT}'
+          f' | early stopping on weighted val loss, patience {EARLY_STOPPING}'
+          f' | {len(trials)} trial rows already logged')
+
+    alive = list(range(x0))
+    for round_no, (n_alive, fraction) in enumerate(schedule, 1):
+        alive = alive[:n_alive]                     # after round 1 the list is best-first, so the prefix is who stays
+        n_rows = int(round(fraction * n_train))
+        start = n_train - n_rows                     # most recent train rows, the ones closest in time to validation
+        todo = [t for t in alive if not ((trials['trial'] == t) & (trials['round'] == round_no)).any()]
+        print(f'--- round {round_no}: {n_alive} configs on the last {n_rows:,} train rows '
+              f'({fraction:.0%}, {int(y_train[start:].sum()):,} laundering) | {len(todo)} to fit')
+        dataset = val_dataset = None
+        if todo:
+            dataset = make_dataset(X_train[start:], y_train[start:])
+            val_dataset = make_val_dataset(X_val, y_val, dataset)
+        for trial in todo:
+            t0 = time.time()
+            booster = fit_booster(configs[trial], dataset, val_dataset, seed)
+            rounds = int(booster.best_iteration)
+            p_val = predict_booster(booster, X_val, rounds)
+            threshold, val_f1 = core.best_f1_threshold(y_val, p_val)
+            row = {'trial': trial, 'round': round_no, 'fraction': fraction, 'n_rows': n_rows,
+                   'val_f1': val_f1, 'threshold': threshold,
+                   'val_pr_auc': float(average_precision_score(y_val, p_val)), 'rounds': rounds,
+                   'seconds': time.time() - t0, 'params': json.dumps(configs[trial])}
+            new_row = pd.DataFrame([row])
+            new_row.to_csv(log_path, mode='a', header=not os.path.exists(log_path), index=False)
+            trials = pd.concat([trials, new_row], ignore_index=True) if len(trials) else new_row
+            print(f"trial {trial:3d} | val F1 {val_f1:.4f} @ {threshold:.3f} | PR-AUC {row['val_pr_auc']:.4f} | "
+                  f"{row['seconds']:.0f}s | leaves {configs[trial]['num_leaves']} rounds {rounds} "
+                  f"lr {configs[trial]['learning_rate']:.3f}")
+            del booster
+        del dataset, val_dataset
+        gc.collect()
+        this_round = trials[(trials['round'] == round_no) & trials['trial'].isin(alive)]
+        ranked = this_round.sort_values([SELECT, 'trial'], ascending=[False, True])
+        alive = ranked['trial'].astype(int).tolist()
+        print(f'round {round_no} best: trial {alive[0]} {SELECT} {ranked[SELECT].iloc[0]:.4f} | '
+              f'median {this_round[SELECT].median():.4f} | {this_round["seconds"].sum() / 60:.1f} min')
+
+    best_trial = alive[0]
+    best_row = trials[(trials['trial'] == best_trial) & (trials['round'] == len(schedule))].iloc[0]
+    best = {'trial': int(best_trial), 'select': SELECT, 'early_stopping': EARLY_STOPPING,
+            'val_f1': float(best_row['val_f1']), 'val_pr_auc': float(best_row['val_pr_auc']),
+            'threshold': float(best_row['threshold']), 'rounds': int(best_row['rounds']),
+            'params': configs[best_trial], 'schedule': schedule, 'x0': x0, 'eta': eta, 'r0': r0, 'seed': seed}
+    json.dump(best, open(f'{out_dir}/best_params.json', 'w'), indent=2)
+    print(f'best configuration: trial {best_trial} ({SELECT} {best[SELECT]:.4f} on the full train rows, '
+          f'{best["rounds"]} rounds)')
+    print(json.dumps(configs[best_trial], indent=1))
+    return configs[best_trial], trials
+
+
+# ==================================================================================================
+# one final run: checkpoints every CHECK_EVERY rounds, lowest-validation-loss round kept, test scored once
+# ==================================================================================================
+
+def run_name_gbt(seed, feature_set=FEATURE_SET):
+    '''lightgbm_readout-<set>_seed-<seed> (CLAUDE.md §6).'''
+    return f'lightgbm_readout-{feature_set}_seed-{seed}'
+
+
+def gbt_result_row(name, seed, best_epoch, threshold, metrics):
+    '''The flat result row with every batch_summary.csv column; params = trees kept, invariant_params = 0.'''
+    row = {'run': name, 'operator': 'lightgbm', 'mp': 'none', 'readout': FEATURE_SET, 'mp_direction': 'none',
+           'temporal_sampling': False, 'node_enc': 'none', 'gfp_variant': 'v0',
+           'seed': seed, 'best_epoch': best_epoch, 'threshold': threshold,
+           'params': best_epoch, 'invariant_params': 0}
+    row.update(core.flatten_metrics(metrics))
+    return row
+
+
+def save_gbt_run(out_dir, row, params, paper_comparison):
+    '''results.json = the flat row + the hyperparameters + F1 at the paper's 0.5 threshold; prints the split table.'''
+    results = dict(row)
+    results['hyperparams'] = {**{k: v for k, v in FIXED_PARAMS.items() if k not in ('verbose', 'num_threads')}, **params}
+    results['paper_comparison'] = paper_comparison
+    json.dump(results, open(f'{out_dir}/results.json', 'w'), indent=2)
+    table = {split: {metric: row[f'{split}_{metric}'] for metric in core.METRICS} for split in core.SPLITS}
+    print(pd.DataFrame(table).round(4))
+
+
+def save_gbt_predictions(out_dir, data, probs, threshold):
+    '''predictions.csv with the columns of gnn_core.save_predictions: every edge of every split, sorted by edge_id.'''
+    frames = []
+    for split in core.SPLITS:
+        rows = data['rows'][split]
+        prob = probs[split].astype(np.float32)
+        frames.append(pd.DataFrame({
+            'split':     split,
+            'edge_id':   data['edge_id'][rows],
+            'src':       data['src'][rows],
+            'dst':       data['dst'][rows],
+            'edge_time': data['edge_time'][rows],
+            'y':         data['y'][rows],
+            'prob':      prob,
+            'pred':      (prob >= threshold).astype(int),
+        }))
+    table = pd.concat(frames).sort_values('edge_id')
+    assert table['edge_id'].is_unique, 'edge_id must identify every scored edge once'
+    n_eval = sum(data['rows'][split].stop - data['rows'][split].start for split in core.SPLITS)
+    assert len(table) == n_eval, f'predictions cover {len(table):,} edges, the splits evaluate {n_eval:,}'
+    table.to_csv(f'{out_dir}/predictions.csv', index=False)
+    print(f'predictions: {len(table):,} rows -> {out_dir}/predictions.csv')
+
+
+def train_final(params, data, seed, out_root, check_every=CHECK_EVERY):
+    '''Train one seed with the chosen configuration, keep the lowest-validation-loss round, score test once.
+
+    Early stopping on the weighted validation loss (patience EARLY_STOPPING) decides the kept round;
+    the threshold is then swept on validation at that round. Writes results.json, history.csv (one
+    row per checkpoint plus the kept round, epoch = boosting round), curves.png, predictions.csv and
+    best.txt (the booster cut at the kept round) to <out_root>/<run>/. A run whose results.json
+    exists is skipped (resume). Returns the flat result row.
+    '''
+    name = run_name_gbt(seed)
+    out_dir = f'{out_root}/{name}'
+    if os.path.exists(f'{out_dir}/results.json'):
+        results = json.load(open(f'{out_dir}/results.json'))
+        print(f'=== {name} === already finished (results.json found), skipping')
+        return {k: v for k, v in results.items() if k not in ('hyperparams', 'paper_comparison')}
+    os.makedirs(out_dir, exist_ok=True)
+    print(f'=== {name} ===')
+    print(f'features: {data["X"].shape[1]} | seed {seed} | rounds {params["num_round"]}'
+          f' (cap; early stopping on weighted val loss, patience {EARLY_STOPPING}) | checkpoint every {check_every}')
+
+    X_train, y_train = split_arrays(data, 'train')
+    X_val, y_val = split_arrays(data, 'val')
+    num_round = params['num_round']
+    checkpoints = set(range(check_every, num_round, check_every)) | {num_round}
+    history, last_time = [], time.time()
+
+    def score_round(booster, k):
+        '''One history row at round k (train / val loss, F1 at the val threshold, PR-AUC, ROC-AUC).'''
+        nonlocal last_time
+        p_train = predict_booster(booster, X_train, k)
+        p_val = predict_booster(booster, X_val, k)
+        threshold, val_f1 = core.best_f1_threshold(y_val, p_val)
+        row = {
+            'epoch':        k,
+            'train_loss':   core.weighted_bce(y_train, p_train),
+            'val_loss':     core.weighted_bce(y_val, p_val),
+            'train_f1':     float(f1_score(y_train, (p_train >= threshold).astype(int))),
+            'val_f1':       val_f1,
+            'train_pr_auc': float(average_precision_score(y_train, p_train)),
+            'val_pr_auc':   float(average_precision_score(y_val, p_val)),
+            'val_roc_auc':  float(roc_auc_score(y_val, p_val)),
+            'threshold':    threshold,
+            'seconds':      time.time() - last_time,
+        }
+        last_time = time.time()
+        return row
+
+    def checkpoint(env):
+        '''LightGBM callback: score the booster at every checkpoint round.'''
+        k = env.iteration + 1
+        if k not in checkpoints:
+            return
+        r = score_round(env.model, k)
+        history.append(r)
+        print(f"round {k:4d} | loss {r['train_loss']:.4f} / {r['val_loss']:.4f} | "
+              f"F1 {r['train_f1']:.4f} / {r['val_f1']:.4f} @ {r['threshold']:.3f} | "
+              f"PR-AUC {r['train_pr_auc']:.4f} / {r['val_pr_auc']:.4f} | {r['seconds']:.0f}s   (train / val)")
+
+    dataset = make_dataset(X_train, y_train)
+    val_dataset = make_val_dataset(X_val, y_val, dataset)
+    booster = fit_booster(params, dataset, val_dataset, seed, callbacks=[checkpoint])
+    del dataset, val_dataset
+    # the kept round is the lowest-validation-loss round; the threshold is swept there
+    best_epoch = int(booster.best_iteration)
+    if best_epoch not in {r['epoch'] for r in history}:
+        history.append(score_round(booster, best_epoch))
+        history.sort(key=lambda r: r['epoch'])
+    kept = next(r for r in history if r['epoch'] == best_epoch)
+    threshold = kept['threshold']
+    print(f'early stopping: lowest weighted validation loss {kept["val_loss"]:.4f} at round {best_epoch} '
+          f'(validation F1 {kept["val_f1"]:.4f}, threshold {threshold:.3f})')
+    pd.DataFrame(history).to_csv(f'{out_dir}/history.csv', index=False)
+    booster.save_model(f'{out_dir}/best.txt', num_iteration=best_epoch)
+
+    # final evaluation: the kept round, one validation-chosen threshold, test scored once
+    metrics, probs, at_half = {}, {}, {}
+    for split in core.SPLITS:
+        X_split, y_split = split_arrays(data, split)
+        probs[split] = predict_booster(booster, X_split, best_epoch)
+        metrics[split] = core.compute_metrics(y_split, probs[split], threshold)
+        at_half[f'{split}_f1_at_0.5'] = float(f1_score(y_split, (probs[split] >= PAPER_THRESHOLD).astype(int)))
+    row = gbt_result_row(name, seed, best_epoch, threshold, metrics)
+    row['model_file'] = 'best.txt'
+    save_gbt_run(out_dir, row, dict(params, early_stopping=EARLY_STOPPING), at_half)
+    save_gbt_predictions(out_dir, data, probs, threshold)
+    core.plot_curves(history, data['y'][data['rows']['test']], probs['test'], metrics['test']['pr_auc'],
+                     best_epoch, name, f'{out_dir}/curves.png')
+    del booster, probs
+    gc.collect()
+    return row
+
+
+# ==================================================================================================
+# batch summaries
+# ==================================================================================================
+
+def seed_summary(rows, out_root, filename='seed_summary_gbt.csv'):
+    '''Mean and std over the seeds of every metric column -> <out_root>/<filename>; the GNN helper, GBT file name.'''
+    return core.seed_summary(rows, out_root, filename)
+
+
+class LightGBM:
+    """LightGBM on the 93 tabular columns. Hydra builds this from conf/model/tabular/lightgbm.yaml."""
+
+    def __init__(self, name='lightgbm'):
+        self.name = name
+
+    def train(self, run):
+        """One fit at the fixed point, then predictions for every evaluated transaction."""
+        from gnn_frauds.model.gnns.run import out_root, write_resolved
+        data = load_gbt_data(run.paths.data_dir)
+        row = train_final(dict(FIXED_POINT), data, int(run.seed), out_root(run, self.name))
+        write_resolved(run, f"{out_root(run, self.name)}/{row['run']}")
+        return row
+
+    def tune(self, run):
+        """Successive halving. The ranges are the hyperparameters file; the schedule is the optimization file."""
+        global X0, ETA, R0, EARLY_STOPPING, CHECK_EVERY, SELECT
+        from gnn_frauds.model.gnns.run import out_root
+        X0 = run.optimization.n_configs
+        ETA = run.optimization.eta
+        R0 = run.optimization.first_fraction
+        EARLY_STOPPING = run.optimization.early_stopping
+        CHECK_EVERY = run.optimization.check_every
+        SELECT = run.optimization.select
+        data = load_gbt_data(run.paths.data_dir)
+        return successive_halving(data, f'{out_root(run, self.name)}/search', x0=X0, eta=ETA, r0=R0, seed=int(run.seed))
+
+    def retrain(self, run, seed):
+        return self.train(run)

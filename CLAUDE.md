@@ -336,6 +336,15 @@ mirror both to their Notion pages. Mark superseded rows `SUPERSEDED`, never dele
 
 ## 7. Repository conventions
 
+- **The package and the command.** The implementation lives in `gnn-frauds/` (import `gnn_frauds`, command
+  `python -m gnn_frauds`). `conf/` is the Hydra tree: dataset, preprocessing (node embedding and GFP), model
+  (`gnns/` and `tabular/`), features (cfg1–cfg7), hyperparameters (values only), optimization (how a search draws
+  them), experiment (train / tune / final) and paths. `__main__.py` only loads Hydra and calls
+  `instantiate(cfg.experiment).run()`. `gnn_core.py`, `gbt_core.py` and `mlp_core.py` re-export the package.
+  `hyperparameters=gnns/v1` is `recipe=None`. A finished train or final run saves the scored weights
+  (`best.pt`, `final.pt`, or LightGBM `best.txt`), `predictions.csv` for every evaluated transaction,
+  `results.json` with `model_file`, and a copy of the resolved config. Tuning trials stay train and val only.
+  `Run_benchmark.ipynb` is the Kaggle launcher: the pinned torch cell, then `pip install -e .`, then the same call.
 - **One notebook per operator, one shared code file.** `GIN_fixed_architecture.ipynb`,
   `PNA_fixed_architecture.ipynb`, `GAT_fixed_architecture.ipynb` and
   `TRANSFORMER_fixed_architecture.ipynb` each run one operator's batch and keep that family's
@@ -386,17 +395,18 @@ mirror both to their Notion pages. Mark superseded rows `SUPERSEDED`, never dele
   outputs show is already in `Outputs/TUNING/<FAMILY>/` (`history.csv`, `trial.json`, `curves.png`,
   `stage_summary.csv`, `probe.json`) and `Outputs/FINAL/<FAMILY>/`; the operator notebooks keep their
   outputs as before.
-  Sixth exception (22 Oct 2026): the Luo tuning is **not a notebook**. `cineca/` holds seven files: `config.sh`
-  (every setting with its default; Loris's account and module go in an untracked `config.local.sh`), `env.sh`,
-  `environment.yml` (conda), `run.sh` (the one command: check / probe / draw / tune / aggregate / final / status /
-  pack), `job.sbatch` (the one job script), `luo.py` (every step as one function, importing `gnn_core.py`) and
-  `README_LORIS.md`. Loris gets the code by `git pull` on Cineca (Leonardo Booster); the data went once as
+  Sixth exception (22 Oct 2026): the Luo tuning is **not a notebook**. `cineca/` holds the cluster scripts:
+  `config.sh` (every setting with its default; Loris's account and module go in an untracked `config.local.sh`),
+  `env.sh`, `run.sh` (the one command: check / probe / draw / tune / aggregate / final / status / pack),
+  `job.sbatch` (the one job script), `luo.py` (every step as one function; tune and final instantiate the same
+  experiment class as `python -m gnn_frauds`; `n_trials` comes from `conf/optimization/luo.yaml`) and
+  `README_LORIS.md`. The conda file is `env/environment.yml`. Loris gets the code by `git pull` on Cineca (Leonardo Booster); the data went once as
   `handoff_data.tar.gz`. Results come back as `results_small.tar.gz` / `results_predictions.tar.gz` /
   `results_models.tar`, unpacked into `Outputs/` and committed as usual. The correctness checks live inside
   `step_aggregate` (asserts), not in a separate test file. Local verification of `cineca/` runs the scripts from a
   scratch copy on a cumulative data slice with a fake `config.local.sh` and fake `sbatch`/`squeue`/`sacct`.
-- **`recipe=None` reproduces v1.** Every `gnn_core.py` entry point takes an optional recipe dict
-  (`full_recipe`, `DEFAULT = the module constants`). After any change to `gnn_core.py`, the regression
+- **`recipe=None` reproduces v1.** `default_recipe()` reads `conf/hyperparameters/gnns/v1.yaml`. Every entry
+  point takes an optional recipe dict (`full_recipe`). After any change to the package, the regression
   check is part of the local verification: `run_experiment(recipe=None)` on the smoke slice with the
   previous file and the new one in the same process must give the same `history.csv` values and
   `best.pt` tensors, and a v1 `best.pt` must still load with `strict=True`. The knobs added on 22 Oct

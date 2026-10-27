@@ -1,0 +1,2 @@
+_target_: gnn_frauds.model.gnns.transformer.Transformer
+name: transformer

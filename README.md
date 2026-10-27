@@ -31,7 +31,9 @@ Full write-up of the work so far: **[Progress_Report.md](Progress_Report.md)**.
 | `GBT_fixed_features.ipynb` | `graph_feature_preprocessor` (CPU, local) | GBT cross-check: LightGBM on the same 93 inputs the GNNs see (81 edge features + the 6 + 6 entity one-hots of both endpoints), no message passing — hand-crafted graph features vs learned ones. One successive-halving search (x0 = 100, train rows only, scored on validation, ranked by validation PR-AUC) over small, strongly regularised trees, every fit stopped on the weighted validation loss (patience 100), then four seeds under the thesis protocol; results in `Outputs/GBT/`, search log in `Outputs/GBT/search/`, summaries `batch_summary_gbt.csv` and `seed_summary_gbt.csv`; verdict in `Progress_Report.md` §7.7. Ends with a clearly labelled appendix outside the protocol: the boosters scored on the test window including the removed tail days (`tail_check.csv`) |
 | `MLP_fixed_features.ipynb` | Kaggle (GPU) | MLP cross-check: a plain neural net on the same 93 inputs as the GBT (edge columns standardised on the train rows, one-hots untouched), no message passing — the GNN readout's input without the learned node states, so it tells message passing from "a neural net" in the GBT comparison. One random search (100 unique trials, one seed each, over three shapes flat / funnel / resnet, widths, depth, normalisation, dropout, learning rate, weight decay, `pos_weight`, batch size; every fit stopped on validation PR-AUC, trials ranked by validation PR-AUC), then four seeds under the thesis protocol; results in `Outputs/MLP/`, search log in `Outputs/MLP/search/`, summaries `batch_summary_mlp.csv` and `seed_summary_mlp.csv`; resumable across Kaggle sessions when the search log is committed in between; verdict in `Progress_Report.md` §7.13 |
 
-`gnn_core.py` — everything shared by the operator notebooks: the fixed model template,
+`gnn-frauds/` — the importable package (`gnn_frauds`). `conf/` chooses the model, the features, the hyperparameters
+and the search. `python -m gnn_frauds` and `Run_benchmark.ipynb` call the same experiment class.
+`gnn_core.py` re-exports the package for the operator notebooks: the fixed model template,
 `build_model(operator, …)`, loaders, the training loop with validation threshold sweep, metrics on
 train / val / test, curves, saving and `invariant_params()`. Notebooks only set the operator, the
 config batch and paths. The `NODE_ENC` knob (`none | rwpe8 | rwpe16`) appends a pre-computed node
@@ -47,10 +49,11 @@ two-seed finalisation (`finalise_trial`).
 
 `cineca/` — the Luo et al. (2024) re-tuning of every operator on configs 2 and 4 (100 random trials × 2 seeds per
 pair, then a 5-seed retrain of each winner; rules in `EXPERIMENTS.md` §2b), packaged for Cineca (Leonardo Booster,
-SLURM): seven files — `config.sh` (settings; personal values in an untracked `config.local.sh`), `env.sh`,
-`environment.yml`, `run.sh <check|probe|draw|tune|aggregate|final|status|pack>` (the one command), `job.sbatch`
-(the one job script), `luo.py` (every step), `README_LORIS.md`. Results land in `Outputs/TUNING_LUO/` and
-`Outputs/FINAL_LUO/`.
+SLURM): `config.sh` (settings; personal values in an untracked `config.local.sh`), `env.sh`,
+`run.sh <check|probe|draw|tune|aggregate|final|status|pack>` (the one command), `job.sbatch`
+(the one job script), `luo.py` (every step; tune and final use the same experiment class as the command above),
+`README_LORIS.md`. The conda file is `env/environment.yml`. `n_trials` is `conf/optimization/luo.yaml`.
+Results land in `Outputs/TUNING_LUO/` and `Outputs/FINAL_LUO/`.
 
 `gbt_core.py` — the GBT cross-check next to the GNNs: builds the 93-column row from the graph files,
 runs the successive-halving search (resumable `trials.csv`; every fit stops on the weighted validation

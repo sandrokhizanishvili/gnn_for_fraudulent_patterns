@@ -1,0 +1,9 @@
+_target_: gnn_frauds.experiment.train.TrainRun
+model: ${model}
+features: ${features}
+hyperparameters: ${hyperparameters}
+optimization: ${optimization}
+dataset: ${dataset}
+preprocessing: ${preprocessing}
+paths: ${paths}
+seed: ${seed}

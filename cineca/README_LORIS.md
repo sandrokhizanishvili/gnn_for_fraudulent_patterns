@@ -2,9 +2,9 @@
 
 **What this is.** This package tunes four graph neural networks (GIN, PNA, GATv2, a graph transformer) on two feature
 sets, following Luo et al. (2024): 100 random trials per (model, feature set), 2 seeds each, then a 5-seed retrain of
-each winner. Every task is a single-GPU SLURM job. Seven files: `config.sh` (settings), `env.sh` (sourced by the
-others), `environment.yml` (the Python packages), `run.sh` (the one command), `job.sbatch` (the one job script),
-`luo.py` (every step) and this README. What the code does is in the repository's `CODE_GUIDE.md`.
+each winner. Every task is a single-GPU SLURM job. The scripts here are `config.sh` (settings), `env.sh` (sourced by the
+others), `run.sh` (the one command), `job.sbatch` (the one job script), `luo.py` (every step) and this README.
+The Python packages are `env/environment.yml`. What the code does is in the repository's `CODE_GUIDE.md`.
 
 **Where to type.** Every command below is typed on a Leonardo login node (the Linux shell you get over SSH), never
 on your own computer. The training itself runs on GPU compute nodes: `run.sh` submits it to SLURM for you.
@@ -39,7 +39,7 @@ tuning runs (every running trial keeps its 100 epoch checkpoints until both seed
 ## 2. Environment (once, on a login node, ~15 min)
 ```bash
 cd $WORK/aml_thesis/code
-conda env create -p $WORK/aml_thesis/env -f cineca/environment.yml
+conda env create -p $WORK/aml_thesis/env -f env/environment.yml
 ```
 If `conda` is not found, load it first (`module avail anaconda`, then e.g. `module load anaconda3`) and add the same
 name to `config.local.sh` as `export MODULES="anaconda3"`, so the jobs load it too. If a compute node then cannot see

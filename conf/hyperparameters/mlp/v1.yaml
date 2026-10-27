@@ -1,0 +1,20 @@
+fixed:
+  hidden: 512
+  depth: 3
+  shape: funnel
+  norm: batch
+  dropout: 0.2
+  lr: 0.001
+  weight_decay: 0.0001
+  pos_weight: 8.0
+  batch_size: 8192
+space:
+  hidden: [128, 256, 512, 1024]
+  depth: [2, 3, 4, 5]
+  shape: [flat, funnel, resnet]
+  norm: [none, batch]
+  dropout: [0.1, 0.2, 0.3, 0.5]
+  lr: [0.0003, 0.001, 0.003]
+  weight_decay: [0.0, 1.0e-5, 0.0001, 0.001]
+  pos_weight: [4.0, 8.0, 16.0]
+  batch_size: [2048, 8192]

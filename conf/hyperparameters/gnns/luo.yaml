@@ -1,0 +1,30 @@
+fixed:
+  hidden: 128
+  num_layers: 2
+  dropout: 0.3
+  norm: none
+  ffn: false
+  num_neighbors: [100, 100]
+  batch_size: 8192
+  epochs: 100
+  lr: 0.001
+  weight_decay: 1.0e-5
+  pos_weight: 8.0
+  self_loops: true
+  residual: identity
+  readout_layers: 2
+  readout_width: 1.0
+  lr_schedule: constant
+  num_workers: 0
+  select_metric: pr_auc
+space:
+  lr: [0.0005, 0.001, 0.003, 0.005, 0.01]
+  hidden: [64, 128, 256, 512]
+  norm: [none, batch, layer]
+  residual: [linear, none]
+  dropout: [0.2, 0.3, 0.5, 0.7]
+  weight_decay: [0.0, 5.0e-5, 5.0e-4, 0.001, 0.01]
+  pos_weight: [4.0, 8.0, 16.0]
+  readout_layers: [1, 2, 3]
+  readout_width: [0.5, 1.0, 2.0]
+depths: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]

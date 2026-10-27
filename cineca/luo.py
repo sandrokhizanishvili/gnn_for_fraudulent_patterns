@@ -317,12 +317,12 @@ def step_probe(index):
 # ==================================================================================================
 
 def step_draw():
-    '''N_TRIALS trials per operator: trial 0 = the v1 knobs, trials 1..N-1 from gnn_core.draw_luo_trials (fixed seed,
-    the same knobs for every operator, the depth from each operator's depths that fit). Refuses to run twice or once
-    a trial folder exists.'''
+    '''n_trials from conf/optimization/luo.yaml, per operator: trial 0 = the v1 knobs, trials 1..N-1 from
+    gnn_core.draw_luo_trials (fixed seed, the same knobs for every operator, the depth from each operator's depths
+    that fit). Refuses to run twice or once a trial folder exists.'''
     out = space_path()
     assert not os.path.exists(out), (f'{out} exists: the draw happens once. Delete it only if no trial has run yet '
-                                     '(and only to change N_TRIALS before the first tune step)')
+                                     '(and only to change n_trials in conf/optimization/luo.yaml before the first tune step)')
     started = glob.glob(f'{tuning_root()}/*/*/trials/*')
     assert not started, f'{len(started)} trial folders exist already: the draw must come before any training'
     probes = {}
@@ -335,7 +335,10 @@ def step_draw():
                   for op, probe in probes.items()}
     allowed = {op: sorted(kept) for op, kept in neighbours.items()}
     workers = {op: int(probes[op]['loader']['chosen']) for op in OPERATORS}
-    n_trials = int(setting('N_TRIALS'))
+    n_trials = int(core.LUO_N_TRIALS)
+    shell_trials = os.environ.get('N_TRIALS')
+    if shell_trials not in (None, '') and int(shell_trials) != n_trials:
+        print(f'N_TRIALS={shell_trials} in the shell is ignored; conf/optimization/luo.yaml has {n_trials}')
     trials = core.draw_luo_trials(n_trials, allowed, neighbours, workers)
     space = {'created': time.strftime('%Y-%m-%d %H:%M:%S'), 'draw_seed': core.LUO_DRAW_SEED, 'n_trials': n_trials,
              'tuning_seeds': list(core.LUO_TUNING_SEEDS), 'final_seeds': list(core.LUO_FINAL_SEEDS),
@@ -391,28 +394,18 @@ def step_tune(op, cfg_id, index):
     sdir = f'{trial_dir(op, cfg_id, trial_id)}/seed-{seed}'
     if not os.path.exists(f'{sdir}/done.json'):
         require_gpu()
+        from gnn_frauds.launch import compose_experiment
         recipe = core.full_recipe(space['trials'][op][trial_id]['recipe'])
         print(f"{space['trials'][op][trial_id]['tag']} | recipe {recipe}")
         graphs, col_sets, node_dim = core.load_graphs(setting('DATA_DIR'), splits=('train', 'val'))
         print(f"test split loaded: {'test' in graphs}")
-        t0 = time.time()
-        try:
-            info = core.run_tuning_seed(op, CONFIGS[cfg_id], graphs, col_sets, node_dim, trial_dir(op, cfg_id, trial_id),
-                                        recipe, seed, eval_train_every=1, patience=None, resume=True, full_metrics=True)
-            # no early stopping here, so fewer epochs than the schedule means the run diverged
-            diverged_at = info['epochs_run'] + 1 if info['epochs_run'] < recipe['epochs'] else None
-            info.update(status='diverged' if diverged_at else 'ok', diverged_at=diverged_at)
-        except (torch.cuda.OutOfMemoryError, RuntimeError) as err:
-            if not core.is_out_of_memory(err):
-                raise
-            # recorded, not retried: a resubmission would hit the same batch again; the trial cannot win
-            print(f'OUT OF MEMORY: trial t{trial_id:03d} seed {seed} recorded as status oom')
-            info = {'status': 'oom', 'diverged_at': None, 'epochs_run': None, 'error': str(err)[:200]}
-        Path(f'{sdir}/best.pt').unlink(missing_ok=True)   # the trial's best.pt is chosen once both seeds are done
-        done = dict(info, seed=seed, trial_id=trial_id, test_split_loaded='test' in graphs,
-                    minutes=(time.time() - t0) / 60, finished=time.time(), **job_info())
-        core.write_json_atomic(f'{sdir}/done.json', done)
-        print(f"seed {seed}: {done['status']} -> {sdir}/done.json")
+        run = compose_experiment([
+            f'model=gnns/{op}', f'features=cfg{cfg_id}', 'hyperparameters=gnns/luo', 'optimization=luo',
+            'experiment=tune', 'paths=cineca', f'experiment.trial_index={index}', f'experiment.config_id={cfg_id}',
+        ])
+        assert run.model.name == op
+        run.run_one(graphs, col_sets, node_dim, trial_dir(op, cfg_id, trial_id), recipe, seed, trial_id,
+                    job_info(), CONFIGS[cfg_id])
     done = finish_times(op, cfg_id, trial_id)
     if len(done) < 2:
         print('the other seed is not done yet; it will finalise the trial')
@@ -558,12 +551,18 @@ def step_final(op, cfg_id, index):
     -> results.json (written last), history.csv, curves.png, sensitivity.csv, predictions.csv, final.pt. Resumable.'''
     seed = final_task(index)
     print(f'final: array index {index} -> seed {seed} | {op} config {cfg_id}')
-    frozen = core.load_recipe(f'{run_dir(op, cfg_id)}/recipe.json')
+    recipe_path = f'{run_dir(op, cfg_id)}/recipe.json'
+    frozen = core.load_recipe(recipe_path)
     assert frozen['operator'] == op and frozen['cfg'] == CONFIGS[cfg_id], 'recipe.json belongs to another pair'
     require_gpu()
-    graphs, col_sets, node_dim = core.load_graphs(setting('DATA_DIR'))
-    core.run_final(op, CONFIGS[cfg_id], graphs, col_sets, node_dim, final_root(op), frozen, seed,
-                   resume=True, eval_curves=True)
+    from gnn_frauds.launch import compose_experiment
+    run = compose_experiment([
+        f'model=gnns/{op}', f'features=cfg{cfg_id}', 'hyperparameters=gnns/luo', 'optimization=luo',
+        'experiment=final', 'paths=cineca', f'experiment.recipe_path={recipe_path}',
+    ])
+    assert run.model.name == op
+    run.run(frozen=frozen, seed=seed, data_dir=setting('DATA_DIR'), out_root_dir=final_root(op),
+            resume=True, eval_curves=True)
     Path(f'{final_dir(op, cfg_id, seed)}/resume.pt').unlink(missing_ok=True)
 
 

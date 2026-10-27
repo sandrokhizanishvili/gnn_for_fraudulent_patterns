@@ -1,0 +1,23 @@
+fixed:
+  objective: binary
+  bagging_freq: 1
+  verbose: -1
+  num_round: 2000
+  num_leaves: 7
+  learning_rate: 0.01
+  min_data_in_leaf: 200
+  feature_fraction: 0.3
+  bagging_fraction: 0.5
+  lambda_l1: 0.01
+  lambda_l2: 1.0
+  scale_pos_weight: 1.0
+space:
+  num_round: {type: int, low: 2000, high: 2000}
+  num_leaves: {type: int, low: 7, high: 63}
+  learning_rate: {type: log, low: 0.01, high: 0.05}
+  min_data_in_leaf: {type: int, low: 200, high: 2000}
+  feature_fraction: {type: float, low: 0.3, high: 0.8}
+  bagging_fraction: {type: float, low: 0.5, high: 1.0}
+  lambda_l1: {type: log, low: 0.01, high: 10.0}
+  lambda_l2: {type: log, low: 1.0, high: 100.0}
+  scale_pos_weight: {type: float, low: 1.0, high: 10.0}

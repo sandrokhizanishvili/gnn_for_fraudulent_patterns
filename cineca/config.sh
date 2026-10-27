@@ -15,7 +15,7 @@ export BASE="$WORK/aml_thesis"              # the folder holding Data/ env/ Outp
 export DATA_DIR="$BASE/Data"                # train_graph.pt, val_graph.pt, test_graph.pt, feature_meta.json
 export ENV_DIR="$BASE/env"                  # the conda environment (README section 2)
 export OUT_DIR="$BASE/Outputs"              # every result goes here (needs up to ~400 GB free during tuning)
-export N_TRIALS=100                         # trials per (operator, config); read once by "run.sh draw"
+export N_TRIALS=100                         # kept for older scripts; the draw reads n_trials from conf/optimization/luo.yaml
 export MAX_PARALLEL=32                      # running tasks per job array (8 arrays -> up to 256 GPUs);
                                             # lower it if your per-user limits are smaller (README section 3)
 

@@ -1,0 +1,10 @@
+_target_: gnn_frauds.experiment.final.FinalRun
+model: ${model}
+features: ${features}
+hyperparameters: ${hyperparameters}
+optimization: ${optimization}
+dataset: ${dataset}
+preprocessing: ${preprocessing}
+paths: ${paths}
+seed: ${seed}
+recipe_path: null

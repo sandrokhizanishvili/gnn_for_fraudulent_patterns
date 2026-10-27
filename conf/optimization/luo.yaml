@@ -1,0 +1,13 @@
+_target_: gnn_frauds.optimization.luo.LuoSearch
+n_trials: 100
+draw_seed: 20261022
+tuning_seeds: [42, 43]
+final_seeds: [42, 43, 44, 45, 46]
+mem_fraction: 0.85
+loader_workers: [0, 4, 6]
+probe:
+  hidden: 512
+  norm: batch
+  residual: linear
+  readout_layers: 3
+  readout_width: 2.0

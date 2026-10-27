@@ -1,0 +1,7 @@
+name: hi_small
+data_dir: Data
+expected_edges: 5077237
+splits:
+  train: 3046342
+  val: 1015447
+  test: 1015448
