@@ -4,6 +4,10 @@ Detecting money-laundering transactions with Graph Neural Networks on the IBM AM
 synthetic dataset (Altman et al., NeurIPS 2023). Extends my Graph Mining course project
 (`../AML_GNN_GMA/`, LI-Small) with a re-validated, leakage-checked pipeline.
 
+**New to the repository? Start with [CODE_GUIDE.md](CODE_GUIDE.md)**: part A is the big picture (what the code
+does, one transaction through the model, the seven feature configurations, which files are live and which are
+superseded, a reading order); part B describes every function of every `.py` file.
+
 Full write-up of the work so far: **[Progress_Report.md](Progress_Report.md)**.
 
 ## Notebooks (run in order)
@@ -43,8 +47,10 @@ two-seed finalisation (`finalise_trial`).
 
 `cineca/` — the Luo et al. (2024) re-tuning of every operator on configs 2 and 4 (100 random trials × 2 seeds per
 pair, then a 5-seed retrain of each winner; rules in `EXPERIMENTS.md` §2b), packaged for Cineca (Leonardo Booster,
-SLURM): plain Python + bash, one `config.sh` to edit, `run_step.sh <check|probe|draw|tune|aggregate|final>`,
-`status.sh`, `pack_results.sh`, `README_LORIS.md`. Results land in `Outputs/TUNING_LUO/` and `Outputs/FINAL_LUO/`.
+SLURM): seven files — `config.sh` (settings; personal values in an untracked `config.local.sh`), `env.sh`,
+`environment.yml`, `run.sh <check|probe|draw|tune|aggregate|final|status|pack>` (the one command), `job.sbatch`
+(the one job script), `luo.py` (every step), `README_LORIS.md`. Results land in `Outputs/TUNING_LUO/` and
+`Outputs/FINAL_LUO/`.
 
 `gbt_core.py` — the GBT cross-check next to the GNNs: builds the 93-column row from the graph files,
 runs the successive-halving search (resumable `trials.csv`; every fit stops on the weighted validation

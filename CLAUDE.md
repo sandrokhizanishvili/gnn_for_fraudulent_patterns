@@ -386,14 +386,15 @@ mirror both to their Notion pages. Mark superseded rows `SUPERSEDED`, never dele
   outputs show is already in `Outputs/TUNING/<FAMILY>/` (`history.csv`, `trial.json`, `curves.png`,
   `stage_summary.csv`, `probe.json`) and `Outputs/FINAL/<FAMILY>/`; the operator notebooks keep their
   outputs as before.
-  Sixth exception (22 Oct 2026): the Luo tuning is **not a notebook**. `cineca/` holds plain Python + bash + SLURM
-  scripts (`probe.py`, `draw_trials.py`, `tune.py`, `aggregate.py`, `final.py`, `*.sbatch`, `run_step.sh`,
-  `status.sh`, `pack_results.sh`, `setup_env.sh`, `requirements.lock`, one `config.sh` that Loris edits,
-  `README_LORIS.md`) that import `gnn_core.py` and are run by Loris on Cineca (Leonardo Booster); results come back as
-  `results_small.tar.gz` / `results_predictions.tar.gz` / `results_models.tar`, unpacked into `Outputs/` and committed
-  as usual. `make_handoff.sh` / `make_env_pack.sh` build the archives for Loris on my laptop (outside the repo). The
-  correctness checks live inside `aggregate.py` (asserts), not in a separate test file. Local verification of
-  `cineca/` runs the scripts from a scratch copy with a fake `config.sh` and fake `sbatch`/`squeue`/`sacct`.
+  Sixth exception (22 Oct 2026): the Luo tuning is **not a notebook**. `cineca/` holds seven files: `config.sh`
+  (every setting with its default; Loris's account and module go in an untracked `config.local.sh`), `env.sh`,
+  `environment.yml` (conda), `run.sh` (the one command: check / probe / draw / tune / aggregate / final / status /
+  pack), `job.sbatch` (the one job script), `luo.py` (every step as one function, importing `gnn_core.py`) and
+  `README_LORIS.md`. Loris gets the code by `git pull` on Cineca (Leonardo Booster); the data went once as
+  `handoff_data.tar.gz`. Results come back as `results_small.tar.gz` / `results_predictions.tar.gz` /
+  `results_models.tar`, unpacked into `Outputs/` and committed as usual. The correctness checks live inside
+  `step_aggregate` (asserts), not in a separate test file. Local verification of `cineca/` runs the scripts from a
+  scratch copy on a cumulative data slice with a fake `config.local.sh` and fake `sbatch`/`squeue`/`sacct`.
 - **`recipe=None` reproduces v1.** Every `gnn_core.py` entry point takes an optional recipe dict
   (`full_recipe`, `DEFAULT = the module constants`). After any change to `gnn_core.py`, the regression
   check is part of the local verification: `run_experiment(recipe=None)` on the smoke slice with the
@@ -437,7 +438,8 @@ mirror both to their Notion pages. Mark superseded rows `SUPERSEDED`, never dele
 - `gnn_core.py` follows the same code-style rules below; each function has a 1–3 line docstring.
 - **Commits:** never commit or push on your own. After each completed run or document sync,
   *propose* a commit (message = what changed, in one line) and wait for my OK. Never push
-  without an explicit yes. `Data/`, `Outputs/`, checkpoints stay out of git.
+  without an explicit yes. `Data/`, `Outputs/`, checkpoints stay out of git. The same rule applies
+  to the `thesis/` repo.
 
 ### Code style — simple, readable, debuggable
 
@@ -463,9 +465,10 @@ mirror both to their Notion pages. Mark superseded rows `SUPERSEDED`, never dele
 
 ## 8. `Progress_Report.md` and the Notion pages — writing style
 
-These are **working documents**, not the thesis. The LaTeX thesis (academic tone) comes at the
-end, in Overleaf. Until then, write them so that a colleague who has never seen the project
-understands each section in one read.
+These are **working documents**, not the thesis. The thesis itself is the LaTeX project in `thesis/`
+(its own git repo, github.com/sandrokhizanishvili/thesis-latex, synced to Overleaf); its rules are in
+`thesis/CLAUDE.md`. `Progress_Report.md` and Notion stay the source of the facts and numbers the thesis
+cites. Write them so that a colleague who has never seen the project understands each section in one read.
 
 ### How to write
 
@@ -526,9 +529,9 @@ understands each section in one read.
 - Ambiguity: ask **one** focused question rather than guessing.
 - Be honest about what a result shows and doesn't. Overclaiming is worse than a null result.
   Ties within seed noise are ties.
-- Thesis text is written in **Overleaf (LaTeX)**. When I ask for writing, produce LaTeX
-  snippets I can paste, reuse `Progress_Report.md` wording where sensible, and cite by
-  author + year (Altman et al. 2023; Xu et al. 2019; Corso et al. 2020; Bouritsas et al.;
-  Liu et al. 2021). The PDFs are in `../AML_GNN_GMA/Papers/`.
+- Thesis text is written in `thesis/` through `/write-section <name>` (outline → researcher → writer →
+  checkers) and checked with `/check-chapter <file>`; never edit thesis text directly, never from memory.
+  Cite only papers listed in `thesis/sources/sources.md` (PDFs in `Papers/`); `git -C thesis pull` before
+  editing (supervisors edit on Overleaf). Reuse `Progress_Report.md` wording where sensible.
 - I work on this in the evenings alongside a full-time job: prefer small, finishable steps and
   tell me clearly where we stopped and what is next.

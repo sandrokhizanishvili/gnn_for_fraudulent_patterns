@@ -1,0 +1,6 @@
+# Scripts run on Linux (Cineca): always LF, whatever the committer's line-ending setting
+*.sh      text eol=lf
+*.sbatch  text eol=lf
+*.py      text eol=lf
+*.yml     text eol=lf
+*.lock    text eol=lf

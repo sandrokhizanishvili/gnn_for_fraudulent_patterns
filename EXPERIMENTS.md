@@ -153,7 +153,7 @@ no Cineca access. Results come back as archives and are committed as usual.
 | Neighbours per hop | Hops 1–2 100, hops 3–4 50, hops 5+ 25. Fallback: hops 3–4 25, hops 5+ 10 |
 | Loader workers | The probe times 0 / 4 / 6 sampling worker processes and the fastest is used. Workers are non-persistent, so resume stays exact (checked locally) |
 | Final | The winner is retrained on train + val for its best epoch, seeds 42–46, at the frozen threshold. Test is scored once per seed; mean ± std. The separate threshold-selection run is not needed: the winning trial already is two train-only runs of the recipe, validated at the frozen epoch |
-| Checks | Asserts inside `cineca/aggregate.py`, run every time (also from `pack_results.sh`). Every trial: 100 epochs × 2 seeds, constant LR, recipe = `trials_space.json`, test never loaded, best epoch recomputed from the two histories, `trial.json` values = `history.csv`, parameter count = the recipe's model, no NaN. Winner: max mean val PR-AUC. Final runs: seeds 42–46, stop epoch and threshold = `recipe.json`, test never scored during training (no test column in `history.csv`). Trial 0 vs the v1 run of the same config is printed as a warning only |
+| Checks | Asserts inside `cineca/luo.py` (`step_aggregate`), run every time (also by `run.sh pack`). Every trial: 100 epochs × 2 seeds, constant LR, recipe = `trials_space.json`, test never loaded, best epoch recomputed from the two histories, `trial.json` values = `history.csv`, parameter count = the recipe's model, no NaN. Winner: max mean val PR-AUC. Final runs: seeds 42–46, stop epoch and threshold = `recipe.json`, test never scored during training (no test column in `history.csv`). Trial 0 vs the v1 run of the same config is printed as a warning only |
 
 **Search space:**
 
@@ -195,7 +195,7 @@ off, no jumping knowledge, 5 final seeds. The epoch counts of ogbn-proteins in t
 - [x] Package `cineca/` + the `gnn_core.py` extensions; regression check (`recipe=None` unchanged) and local smoke test
       on the slice (22 Oct)
 - [x] **23 Oct** — Hand-off to Loris: `handoff_loris.zip` on Google Drive (`README_LORIS.md` + `handoff_code.tar.gz` + `handoff_data.tar.gz`)
-- [ ] Environment check on a GPU node (`run_step.sh check`)
+- [ ] Environment check on a GPU node (`run.sh check`)
 - [ ] Probe ×4 → `Outputs/TUNING_LUO/<FAMILY>/probe.json` (depths that fit, loader workers, job memory)
 - [ ] Draw → `Outputs/TUNING_LUO/trials_space.json`
 - [ ] Early check-in: trials 0–9 of every pair → `results_small.tar.gz` to Sandro before the rest
@@ -456,7 +456,7 @@ close, that is stated, not hidden by picking a different epoch. The search may s
 and threshold, and scores test once per seed; summaries give mean ± std over the seeds. Run names keep the
 v1 convention; the seed is a sub-folder.*
 
-### Luo-tuned final retrain (Cineca, `cineca/final.py`; 8 pairs × seeds 42–46, after `aggregate` froze each `recipe.json`)
+### Luo-tuned final retrain (Cineca, `cineca/luo.py final`; 8 pairs × seeds 42–46, after `aggregate` froze each `recipe.json`)
 
 - [ ] **GIN-2 Luo** · base / base → `Outputs/FINAL_LUO/GIN/gin_mp-base_readout-base_dir-in/seed-<s>/`
 - [ ] **GIN-4 Luo** · base+GFP / base+GFP → `Outputs/FINAL_LUO/GIN/gin_mp-full_readout-full_dir-in/seed-<s>/`
@@ -522,6 +522,13 @@ Same decision rule as for GIN: nothing is chosen on test; configs 4, 5 and 6 reu
 
 *Newest first. Unticked = in progress · ticked = finished and synced.*
 
+- [ ] **27 Oct** — `cineca/` simplified from 23 files to seven (`config.sh` + untracked `config.local.sh`, `env.sh`,
+      `environment.yml`, `run.sh`, `job.sbatch`, `luo.py`, `README_LORIS.md`) after Loris asked for code and
+      configuration by `git pull` and a conda environment; the pip path, the four per-step job scripts, the eight
+      per-step Python files and the laptop hand-off scripts are gone; `.gitattributes` forces LF, `logs/` ignored;
+      `CODE_GUIDE.md` added (big picture + every function of every `.py`). Local end-to-end run on a cumulative slice
+      with fake SLURM: check, probe, status, draw and tune passed before the push; aggregate, final, pack still running
+      (ticked when they pass). Data to Loris as `handoff_data.tar.gz` on Drive (same content as 23 Oct).
 - [x] **24 Oct** — MLP cross-check finished in one Kaggle T4 session (notebook `sandrokh/notebook12baf08d19`, 9 h search +
       4 final seeds); output pulled with the Kaggle CLI into `Outputs/MLP/` (small files committed; `best.pt`,
       `predictions.csv` local); `Progress_Report.md` §7.13 written, MLP row added to the §7.7 comparison, README summary
@@ -825,7 +832,7 @@ session.
 - *Checkpoints:* every epoch's checkpoint is kept until both seeds of the trial are done; then `finalise_trial` keeps
   the best epoch's as `seed-<s>/best.pt`, deletes the rest and `resume.pt`, and writes `trial.json` last (CPU only,
   from the two histories). Only the task of the seed that finished last runs it, so two processes never finalise the
-  same trial at once; `aggregate.py` finalises a trial left over (e.g. cut by the time limit) once its last seed
+  same trial at once; the aggregate step finalises a trial left over (e.g. cut by the time limit) once its last seed
   finished over 10 minutes ago.
 - *Job memory:* 1.5 × the probe's peak CPU memory (main + workers) + 4 GB, rounded up to 8 GB (final + 8 GB);
   `MEM=auto` in `config.sh`.

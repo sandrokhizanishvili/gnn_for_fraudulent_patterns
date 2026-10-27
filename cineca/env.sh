@@ -1,16 +1,18 @@
-# Sourced by every job script and by run_step.sh / status.sh / pack_results.sh: settings, modules, Python env.
-# Nothing here needs editing — settings live in config.sh.
+# Sourced by run.sh and job.sbatch: settings (config.sh, then config.local.sh), modules, the Python environment.
 CINECA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODE_DIR="$(dirname "$CINECA_DIR")"
 source "$CINECA_DIR/config.sh"
+if [ -f "$CINECA_DIR/config.local.sh" ]; then
+    source "$CINECA_DIR/config.local.sh"
+fi
 if [ -n "${MODULES:-}" ]; then
     module load $MODULES
 fi
-if [ ! -f "$ENV_DIR/bin/activate" ]; then
-    echo "No Python environment at ENV_DIR=$ENV_DIR: run 'bash cineca/setup_env.sh' first (README section 2)" >&2
+if [ ! -x "$ENV_DIR/bin/python" ]; then
+    echo "No Python environment at ENV_DIR=$ENV_DIR: create it first (README section 2)" >&2
     exit 1
 fi
-source "$ENV_DIR/bin/activate"
+export PATH="$ENV_DIR/bin:$PATH"
 export MPLBACKEND=Agg              # plots go to files, never to a screen
 export PYTHONUNBUFFERED=1          # log lines appear as they happen
 export TQDM_DISABLE=1              # no progress bars in the logs
